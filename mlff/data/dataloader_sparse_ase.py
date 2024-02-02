@@ -95,10 +95,15 @@ def ASE_to_jraph(
             stress = mol.get_stress()
         except PropertyNotImplementedError:
             stress = None
+        try:
+            dipole_moment = mol.get_dipole_moment()
+        except PropertyNotImplementedError:
+            stress = None
     else:
         energy = None
         forces = None
         stress = None
+        dipole = None
 
     if mol.get_pbc().any():
         i, j, S = neighbor_list('ijS', mol, cutoff, self_interaction=self_interaction)
@@ -128,7 +133,8 @@ def ASE_to_jraph(
 
     global_context = {
         "energy": np.array([energy]) if energy is not None else None,
-        "stress": np.array(stress) if stress is not None else None
+        "stress": np.array(stress) if stress is not None else None,
+        "dipole_components": np.array(dipole) if dipole is not None else None
     }
 
     return jraph.GraphsTuple(
