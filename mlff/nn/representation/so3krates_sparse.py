@@ -3,7 +3,7 @@ import jax
 from mlff.nn.stacknet import StackNetSparse
 from mlff.nn.embed import GeometryEmbedSparse, AtomTypeEmbedSparse
 from mlff.nn.layer import SO3kratesLayerSparse
-from mlff.nn.observable import EnergySparse, PartialChargeSparse
+from mlff.nn.observable import EnergySparse, DipoleSparse
 from typing import Sequence
 
 
