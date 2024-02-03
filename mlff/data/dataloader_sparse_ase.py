@@ -96,13 +96,18 @@ def ASE_to_jraph(
         except PropertyNotImplementedError:
             stress = None
         try:
-            dipole_moment = mol.get_dipole_moment()
+            hirsh_ratios = mol.info['hirsh_ratios']
         except PropertyNotImplementedError:
-            stress = None
+            hirsh_ratios = None
+        try:
+            dipole = mol.info['dipole']
+        except PropertyNotImplementedError:
+            dipole = None
     else:
         energy = None
         forces = None
         stress = None
+        hirsh_ratios = None
         dipole = None
 
     if mol.get_pbc().any():
@@ -123,6 +128,7 @@ def ASE_to_jraph(
             "positions": np.array(positions),
             "atomic_numbers": np.array(atomic_numbers),
             "forces": np.array(forces) if forces is not None else None,
+            "hirsh_ratios": np.array(hirsh_ratios) if hirsh_ratios is not None else None
             }
 
     senders = np.array(j)
@@ -134,7 +140,7 @@ def ASE_to_jraph(
     global_context = {
         "energy": np.array([energy]) if energy is not None else None,
         "stress": np.array(stress) if stress is not None else None,
-        "dipole_components": np.array(dipole) if dipole is not None else None
+        "dipole": np.array(dipole) if dipole is not None else None
     }
 
     return jraph.GraphsTuple(
