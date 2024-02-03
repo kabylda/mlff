@@ -13,6 +13,7 @@ property_to_mask = {
     'energy': 'graph_mask',
     'stress': 'graph_mask',
     'forces': 'node_mask',
+    'dipole': 'graph_mask',
 }
 
 

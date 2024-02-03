@@ -50,6 +50,7 @@ class AseDataLoaderSparse:
                 max_num_of_nodes = max_num_of_nodes if num_nodes <= max_num_of_nodes else num_nodes
                 max_num_of_edges = max_num_of_edges if num_edges <= max_num_of_edges else num_edges
                 loaded_data.append(graph)
+                # print('GRAPH', graph)
             else:
                 pass
             i += 1
@@ -96,19 +97,24 @@ def ASE_to_jraph(
         except PropertyNotImplementedError:
             stress = None
         try:
-            hirsh_ratios = mol.info['hirsh_ratios']
+            hirsh_ratios = mol.arrays['hirsh_ratios']
         except PropertyNotImplementedError:
             hirsh_ratios = None
         try:
             dipole = mol.info['dipole']
         except PropertyNotImplementedError:
             dipole = None
+        try:
+            total_charge = mol.info['total_charge']
+        except:
+            total_charge = None
     else:
         energy = None
         forces = None
         stress = None
         hirsh_ratios = None
         dipole = None
+        total_charge = None
 
     if mol.get_pbc().any():
         i, j, S = neighbor_list('ijS', mol, cutoff, self_interaction=self_interaction)
@@ -140,7 +146,8 @@ def ASE_to_jraph(
     global_context = {
         "energy": np.array([energy]) if energy is not None else None,
         "stress": np.array(stress) if stress is not None else None,
-        "dipole": np.array(dipole) if dipole is not None else None
+        "dipole": np.array([np.linalg.norm(dipole)]) if dipole is not None else None,
+        "total_charge": np.array([total_charge]) if total_charge is not None else None,
     }
 
     return jraph.GraphsTuple(
