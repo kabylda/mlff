@@ -3,7 +3,7 @@ import jax
 from mlff.nn.stacknet import StackNetSparse
 from mlff.nn.embed import GeometryEmbedSparse, AtomTypeEmbedSparse
 from mlff.nn.layer import SO3kratesLayerSparse
-from mlff.nn.observable import EnergySparse, DipoleSparse
+from mlff.nn.observable import EnergySparse, DipoleSparse, HirshfeldSparse
 from typing import Sequence
 
 
@@ -85,10 +85,21 @@ def init_so3krates_sparse(
         # learn_atomic_type_shifts=energy_learn_atomic_type_shifts,
     )
 
+    hirshfeld_ratios = HirshfeldSparse(
+        prop_keys=None,
+        output_is_zero_at_init=output_is_zero_at_init,
+        regression_dim=energy_regression_dim,
+        activation_fn=getattr(
+            nn.activation, energy_activation_fn
+        ) if energy_activation_fn != 'identity' else lambda u: u,
+        # learn_atomic_type_scales=energy_learn_atomic_type_scales,
+        # learn_atomic_type_shifts=energy_learn_atomic_type_shifts,
+    )    
+
     return StackNetSparse(
         geometry_embeddings=[geometry_embed],
         feature_embeddings=[atom_type_embed],
         layers=layers,
-        observables=[energy, dipole],
+        observables=[energy, dipole, hirshfeld_ratios],
         prop_keys=None
     )

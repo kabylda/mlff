@@ -14,6 +14,7 @@ property_to_mask = {
     'stress': 'graph_mask',
     'forces': 'node_mask',
     'dipole': 'graph_mask',
+    'hirshfeld_ratios': 'node_mask',
 }
 
 def print_metrics(epoch, eval_metrics):
