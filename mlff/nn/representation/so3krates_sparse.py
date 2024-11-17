@@ -48,6 +48,7 @@ def init_so3krates_sparse(
         dispersion_energy_cutoff_lr_damping: Optional[float] = None,
         dispersion_energy_scale: float = 1.0,
         zbl_repulsion_bool: bool = False,
+        return_representations_bool: bool = False,
         input_convention: str = 'positions',
         neighborlist_format_lr: str = 'sparse'  # or 'ordered_sparse'
 ):
@@ -149,5 +150,6 @@ def init_so3krates_sparse(
         feature_embeddings=embedding_modules,
         layers=layers,
         observables=[energy, dipole_vec, hirshfeld_ratios],
+        return_representations_bool=return_representations_bool,
         prop_keys=None
     )

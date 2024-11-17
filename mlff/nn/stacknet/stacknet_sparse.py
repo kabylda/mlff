@@ -19,6 +19,7 @@ class StackNetSparse(nn.Module):
     feature_embeddings: Sequence[Callable]
     layers: Sequence[Callable]
     observables: Sequence[Callable]
+    return_representations_bool: bool = False
     prop_keys: Dict
 
     def setup(self):
@@ -70,7 +71,11 @@ class StackNetSparse(nn.Module):
             updated_quantities = layer(**quantities)
             quantities.update(updated_quantities)
 
-        observables = {}
+        if self.return_representations_bool:
+            return {
+                'atomic_representations': x
+            }
+
         for o_fn in self.observables:
             o_dict = o_fn(quantities)
             observables.update(o_dict)

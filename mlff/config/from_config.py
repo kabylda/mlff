@@ -23,11 +23,15 @@ logging.Logger.trace = partialmethod(logging.Logger.log, logging.MLFF)
 logging.mlff = partial(logging.log, logging.MLFF)
 
 
-def make_so3krates_sparse_from_config(config: config_dict.ConfigDict = None):
+def make_so3krates_sparse_from_config(
+        config: config_dict.ConfigDict = None,
+        return_representations_bool: bool = False
+):
     """Make a SO3krates model from a config.
 
     Args:
         config (): The config.
+        return_representations_bool (): Create a SO3krates model that only returns the atomic representatios.
 
     Returns:
         SO3krates flax model.
@@ -67,6 +71,7 @@ def make_so3krates_sparse_from_config(config: config_dict.ConfigDict = None):
         dispersion_energy_bool=model_config.dispersion_energy_bool,
         dispersion_energy_cutoff_lr_damping=model_config.dispersion_energy_cutoff_lr_damping,
         dispersion_energy_scale=model_config.dispersion_energy_scale,
+        return_representations_bool=return_representations_bool,
         zbl_repulsion_bool=model_config.zbl_repulsion_bool,
         neighborlist_format_lr=config.neighborlist_format_lr,
     )
