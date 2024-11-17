@@ -19,8 +19,8 @@ class StackNetSparse(nn.Module):
     feature_embeddings: Sequence[Callable]
     layers: Sequence[Callable]
     observables: Sequence[Callable]
-    return_representations_bool: bool = False
     prop_keys: Dict
+    return_representations_bool: bool = False
 
     def setup(self):
         if len(self.feature_embeddings) == 0:
