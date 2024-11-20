@@ -76,6 +76,7 @@ class StackNetSparse(nn.Module):
                 'atomic_representations': x
             }
 
+        observables = {}
         for o_fn in self.observables:
             o_dict = o_fn(quantities)
             observables.update(o_dict)
