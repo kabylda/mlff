@@ -73,7 +73,7 @@ class StackNetSparse(nn.Module):
 
         if self.return_representations_bool:
             return {
-                'atomic_representations': x
+                'atomic_representations': quantities['x']
             }
 
         observables = {}
