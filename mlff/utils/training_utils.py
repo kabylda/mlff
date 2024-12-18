@@ -12,6 +12,9 @@ import wandb
 
 from flax.core.frozen_dict import unfreeze
 
+from mlff.masking.mask import safe_mask
+
+
 def print_metrics(epoch, eval_metrics):
     formatted_output = f"{epoch}: "
     for key, value in eval_metrics.items():
@@ -51,10 +54,12 @@ def node_mse_loss(y, y_label, batch_segments, graph_mask, scale):
 
     num_graphs = graph_mask.sum().astype(y.dtype)  # ()
 
-    squared = 2 * optax.l2_loss(
-        predictions=y,
-        targets=y_label,
-    )  # same shape as y
+    squared = safe_mask(
+        fn=lambda u: jnp.square(u),
+        operand=y - y_label,
+        mask=~jnp.isnan(y_label),
+        placeholder=0.
+    )
 
     # sum up the l2_losses for node properties along the non-leading dimension. For e.g. scalar node quantities
     # this does not have any effect, but e.g. for vectorial and tensorial node properties one averages over all
@@ -89,7 +94,7 @@ def node_mse_loss(y, y_label, batch_segments, graph_mask, scale):
         data_msk,
         per_graph_mse,
         jnp.asarray(0., dtype=per_graph_mse.dtype)
-    )
+    )  # (num_graphs)
 
     # Calculate the number of graphs that have no data present.
     num_graphs_no_data = jnp.where(
