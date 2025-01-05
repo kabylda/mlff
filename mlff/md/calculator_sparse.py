@@ -276,7 +276,7 @@ class mlffCalculatorSparse(Calculator):
 
         neighbors = self.spatial_partitioning.update_fn(system.R, self.neighbors, new_cell=cell)
         if neighbors.overflow:
-            logging.msg('Re-allocating neighbours. ') 
+            logging.mlff('Re-allocating neighbours. ') 
             self.neighbors, self.spatial_partitioning = neighbor_list(
                         positions=system.R,
                         cell=cell,

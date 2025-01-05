@@ -141,7 +141,7 @@ class mlffCalculator(Calculator):
                                                                       cutoff=self.cutoff,
                                                                       skin=0.,
                                                                       capacity_multiplier=self.capacity_multiplier)
-            logging.msg('Re-allocating neighbours. ') 
+            logging.mlff('Re-allocating neighbours. ') 
             neighbors = self.spatial_partitioning.update_fn(R, self.neighbors)
             assert not neighbors.overflow
             self.neighbors = neighbors
