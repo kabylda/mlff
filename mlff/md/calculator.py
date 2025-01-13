@@ -136,7 +136,15 @@ class mlffCalculator(Calculator):
 
         neighbors = self.spatial_partitioning.update_fn(R, self.neighbors)
         if neighbors.overflow:
-            raise RuntimeError('Spatial overflow.')
+            self.neighbors, self.spatial_partitioning = neighbor_list(positions=R,
+                                                                      cell=cell,
+                                                                      cutoff=self.cutoff,
+                                                                      skin=0.,
+                                                                      capacity_multiplier=self.capacity_multiplier)
+            logging.mlff('Re-allocating neighbours. ') 
+            neighbors = self.spatial_partitioning.update_fn(R, self.neighbors)
+            assert not neighbors.overflow
+            self.neighbors = neighbors
         else:
             self.neighbors = neighbors
 
