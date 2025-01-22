@@ -4,55 +4,113 @@ import numpy as np
 import logging
 
 from collections import namedtuple
+from functools import partial, partialmethod
 from typing import Any
 
 from ase.calculators.calculator import Calculator
 
 from mlff.utils.structures import Graph
 from mlff.mdx.potential import MLFFPotentialSparse
+
 try:
-    from glp.calculators.utils import strain_graph, get_strain
+    from glp.calculators.utils import strain_graph, get_strain, strain_system
     from glp import System, atoms_to_system
     from glp.graph import system_to_graph
 except ImportError:
     raise ImportError('Please install GLP package for running MD.')
 
 SpatialPartitioning = namedtuple(
-    "SpatialPartitioning", ("allocate_fn", "update_fn", "cutoff", "skin", "capacity_multiplier")
+    "SpatialPartitioning",
+    (
+        "allocate_fn",
+        "update_fn",
+        "cutoff",
+        "lr_cutoff",
+        "skin",
+        "capacity_multiplier",
+        "buffer_size_multiplier"
+    )
 )
 
-logging.basicConfig(level=logging.INFO)
+logging.MLFF = 35
+logging.addLevelName(logging.MLFF, 'MLFF')
+logging.Logger.trace = partialmethod(logging.Logger.log, logging.MLFF)
+logging.mlff = partial(logging.log, logging.MLFF)
 
 StackNet = Any
+
+
+def matrix_to_voigt(matrix):
+    """
+    Convert a 3x3 matrix to a 6-component stress vector in Voigt notation.
+
+    Args:
+        matrix (jnp.ndarray): A 3x3 matrix.
+
+    Returns:
+        jnp.ndarray: A 6-component stress vector in Voigt notation.
+    """
+
+    # Check input
+    if matrix.shape != (3, 3):
+        raise ValueError("Input must be a 3x3 matrix. Shape is ", matrix.shape)
+
+    # Form Voigt vector
+    voigt_vector = jnp.array(
+        [
+            matrix[0, 0],
+            matrix[1, 1],
+            matrix[2, 2],
+            (matrix[1, 2] + matrix[2, 1]) / 2,
+            (matrix[0, 2] + matrix[2, 0]) / 2,
+            (matrix[0, 1] + matrix[1, 0]) / 2
+        ]
+    )
+
+    return voigt_vector
 
 
 class mlffCalculatorSparse(Calculator):
     implemented_properties = ['energy', 'forces', 'stress', 'free_energy']
 
     @classmethod
-    def create_from_ckpt_dir(cls,
-                             ckpt_dir: str,
-                             calculate_stress: bool = False,
-                             E_to_eV: float = 1.,
-                             F_to_eV_Ang: float = 1.,
-                             capacity_multiplier: float = 1.25,
-                             add_energy_shift: bool = False,
-                             dtype: np.dtype = np.float32,
-                             model: str = 'so3krates',
-                             has_aux: bool = False):
+    def create_from_ckpt_dir(
+            cls,
+            ckpt_dir: str,
+            calculate_stress: bool = False,
+            lr_neighbors_bool: bool = True,
+            lr_cutoff: float = 10.,
+            dispersion_energy_lr_cutoff_damping: float = 2.,
+            capacity_multiplier: float = 1.25,
+            buffer_size_multiplier: float = 1.25,
+            skin: float = 0.,
+            add_energy_shift: bool = False,
+            dtype: np.dtype = np.float64,
+            model: str = 'so3krates',
+            has_aux: bool = False,
+            from_file: bool = False
+    ):
 
         mlff_potential = MLFFPotentialSparse.create_from_ckpt_dir(
             ckpt_dir=ckpt_dir,
             add_shift=add_energy_shift,
+            long_range_kwargs=dict(
+                cutoff_lr=lr_cutoff,
+                dispersion_energy_cutoff_lr_damping=dispersion_energy_lr_cutoff_damping,
+                neighborlist_format_lr='sparse',  # ASECalculator has sparse format.
+            ),
             dtype=dtype,
             model=model,
+            from_file=from_file
         )
 
         return cls(potential=mlff_potential,
                    calculate_stress=calculate_stress,
-                   E_to_eV=E_to_eV,
-                   F_to_eV_Ang=F_to_eV_Ang,
                    capacity_multiplier=capacity_multiplier,
+                   buffer_size_multiplier=buffer_size_multiplier,
+                   skin=skin,
+                   lr_neighbors_bool=lr_neighbors_bool,
+                   lr_cutoff=lr_cutoff,
                    dtype=dtype,
                    has_aux=has_aux
                    )
@@ -60,41 +118,27 @@ class mlffCalculatorSparse(Calculator):
     def __init__(
             self,
             potential,
-            E_to_eV: float = 1.,
-            F_to_eV_Ang: float = 1.,
-            capacity_multiplier: float = 1.25,
-            calculate_stress: bool = False,
-            dtype: np.dtype = np.float32,
-            has_aux: bool = False,
+            capacity_multiplier: float,
+            buffer_size_multiplier: float,
+            skin: float,
+            calculate_stress: bool,
+            dtype: np.dtype,
+            has_aux: bool,
             *args,
             **kwargs
     ):
         """
         ASE calculator given a StackNet and parameters.
-
-        A calculator takes atomic numbers and atomic positions from an Atoms object and calculates the energy and
-        forces.
-
-        Args:
-            E_to_eV (float): Conversion factor from whatever energy unit is used by the model to eV.
-                By default this parameter is set to convert from kcal/mol.
-            F_to_eV_Ang (float): Conversion factor from whatever length unit is used by the model to Angstrom. By
-                default, the length unit is not converted (assumed to be in Angstrom)
-            *args ():
-            **kwargs ():
         """
+
         super(mlffCalculatorSparse, self).__init__(*args, **kwargs)
-        self.log = logging.getLogger(__name__)
-        self.log.warning(
-            'Please remember to specify the proper conversion factors, if your model does not use '
-            '\'eV\' and \'Ang\' as units.'
-        )
+
         if calculate_stress:
             def energy_fn(system, strain: jnp.ndarray, neighbors):
-                graph = system_to_graph(system, neighbors)
-                graph = strain_graph(graph, strain)
+                system = strain_system(system, strain)
+                graph = system_to_graph(system, neighbors, pme=False)
 
-                out, aux = potential(graph, has_aux=has_aux)
+                out = potential(graph, has_aux=has_aux)
                 if isinstance(out, tuple):
                     atomic_energy = out[0]
                     aux = out[1]
@@ -115,10 +159,12 @@ class mlffCalculatorSparse(Calculator):
                     system,
                     strain,
                     neighbors
-                  )
+                )
 
                 forces = - grads[0].R
-                stress = grads[1]
+                volume = jnp.abs(jnp.dot(jnp.cross(system.cell[0], system.cell[1]), system.cell[2]))
+                stress = grads[1] / volume
+                stress = matrix_to_voigt(stress)
 
                 if isinstance(out, tuple):
                     if not has_aux:
@@ -130,7 +176,7 @@ class mlffCalculatorSparse(Calculator):
 
         else:
             def energy_fn(system, neighbors):
-                graph = system_to_graph(system, neighbors)
+                graph = system_to_graph(system, neighbors, pme=False)
                 out = potential(graph, has_aux=has_aux)
                 if isinstance(out, tuple):
                     if not has_aux:
@@ -164,42 +210,103 @@ class mlffCalculatorSparse(Calculator):
                     return {'energy': out, 'forces': forces}
 
         self.calculate_fn = calculate_fn
-
         self.neighbors = None
         self.spatial_partitioning = None
         self.capacity_multiplier = capacity_multiplier
+        self.buffer_size_multiplier = buffer_size_multiplier
+        self.skin = skin
+        self.cutoff = potential.cutoff  # cutoff for the local neighbor list
 
-        self.cutoff = potential.cutoff
+        # Check if the ML potential has long-range components
+        long_range_bool = potential.long_range_bool
+
+        # Determine the cutoff for the neighborlist.
+        if long_range_bool is False:
+            # Corresponds to having a (semi)-local ML potential as constructed by MPNN.
+            logging.mlff(
+                f'Running a local model with local cutoff {potential.cutoff}.'
+            )
+            self.lr_cutoff = -1.
+            # Setting neighborlist cutoff to -1 corresponds to long range indices which equal the local indices.
+            # Currently, NL list implementation does not allow to skip the calculation of lr indices as a whole.
+            # TODO(kabylda): Maybe fix this? Not sure about the overhead due to this for a local model.
+        else:
+            # Corresponds to having a (semi)-local ML potential as constructed by MPNN and a long-range part
+            # of electrostatics and/or dispersion energy.
+
+            if potential.long_range_cutoff is None:
+                logging.mlff(
+                    f'Running a model with long-range corrections. The local cutoff is {potential.cutoff} Ang and '
+                    f'no explicit long-range cutoff.'
+                )
+                # Take all atoms into account for long range NL list calculation if the potential has no cutoff
+                # but is long-ranged. Can only be applied for structures in vacuum.
+                self.lr_cutoff = 1e6
+            else:
+                logging.mlff(
+                    f'Running a model with long-range corrections. The local cutoff is {potential.cutoff} Ang and '
+                    f'the long-range cutoff is {potential.long_range_cutoff}.'
+                )
+                # Take all atoms up to long range cutoff for long range NL list calculation into account.
+                # Common setting for simulations in a box of water.
+                self.lr_cutoff = potential.long_range_cutoff
 
         self.dtype = dtype
 
     def calculate(self, atoms=None, *args, **kwargs):
         super(mlffCalculatorSparse, self).calculate(atoms, *args, **kwargs)
 
-        R = jnp.array(atoms.get_positions(), dtype=self.dtype)  # shape: (n,3)
-        z = jnp.array(atoms.get_atomic_numbers(), dtype=jnp.int16)  # shape: (n)
+        system = atoms_to_system(atoms, dtype=self.dtype)
 
         if atoms.get_pbc().any():
-            cell = jnp.array(np.array(atoms.get_cell()), dtype=self.dtype).T  # (3,3)
+            cell = jnp.array(np.array(atoms.get_cell()), dtype=self.dtype).T  # (3, 3)
         else:
             cell = None
 
         if self.spatial_partitioning is None:
-            self.neighbors, self.spatial_partitioning = neighbor_list(positions=R,
-                                                                      cell=cell,
-                                                                      cutoff=self.cutoff,
-                                                                      skin=0.,
-                                                                      capacity_multiplier=self.capacity_multiplier)
+            self.neighbors, self.spatial_partitioning = neighbor_list(
+                positions=system.R,
+                cell=cell,
+                cutoff=self.cutoff,
+                skin=self.skin,
+                capacity_multiplier=self.capacity_multiplier,
+                buffer_size_multiplier=self.buffer_size_multiplier,
+                lr_cutoff=self.lr_cutoff,
+            )
 
-        neighbors = self.spatial_partitioning.update_fn(R, self.neighbors)
+        neighbors = self.spatial_partitioning.update_fn(system.R, self.neighbors, new_cell=cell)
         if neighbors.overflow:
-            raise RuntimeError('Spatial overflow.')
+            logging.mlff('Re-allocating neighbours. ') 
+            self.neighbors, self.spatial_partitioning = neighbor_list(
+                        positions=system.R,
+                        cell=cell,
+                        cutoff=self.cutoff,
+                        skin=self.skin,
+                        capacity_multiplier=self.capacity_multiplier,
+                        buffer_size_multiplier=self.buffer_size_multiplier,
+                        lr_cutoff=self.lr_cutoff,
+            )
+            neighbors = self.spatial_partitioning.update_fn(system.R, self.neighbors, new_cell=cell)
+            assert not neighbors.overflow
+            self.neighbors = neighbors
         else:
             self.neighbors = neighbors
+        if neighbors.cell_list is not None:
+            # If cell list needs to be reallocated, then reallocate neighbors
+            if neighbors.cell_list.reallocate:
+                # self.neighbors now contains Neighbors namedtuple with idx_i_lr etc.
+                self.neighbors, self.spatial_partitioning = neighbor_list(
+                    positions=system.R,
+                    cell=cell,
+                    cutoff=self.cutoff,
+                    skin=self.skin,
+                    capacity_multiplier=self.capacity_multiplier,
+                    buffer_size_multiplier=self.buffer_size_multiplier,
+                    lr_cutoff=self.lr_cutoff
+                )
 
-        output = self.calculate_fn(System(R=R, Z=z, cell=cell), neighbors=neighbors)  # note different cell convention
-
-        self.results = jax.tree_map(lambda x: np.array(x), output)
+        output = self.calculate_fn(system, neighbors)  # note different cell convention
+        self.results = jax.tree_map(lambda x: np.array(x, self.dtype), output)
 
 
 def to_displacement(cell):
@@ -247,16 +354,25 @@ def add_batch_dim(tree):
     return jax.tree_map(lambda x: x[None], tree)
 
 
-def neighbor_list(positions: jnp.ndarray, cutoff: float, skin: float, cell: jnp.ndarray = None,
-                  capacity_multiplier: float = 1.25):
+def neighbor_list(
+        positions: jnp.ndarray,
+        cutoff: float,
+        lr_cutoff: float,
+        skin: float = 0.,
+        cell: jnp.ndarray = None,
+        capacity_multiplier: float = 1.25,
+        buffer_size_multiplier: float = 1.25
+):
     """
 
     Args:
         positions ():
         cutoff ():
+        lr_cutoff ():
         skin ():
         cell (): ASE cell.
         capacity_multiplier ():
+        buffer_size_multiplier ():
 
     Returns:
 
@@ -267,13 +383,20 @@ def neighbor_list(positions: jnp.ndarray, cutoff: float, skin: float, cell: jnp.
         raise ImportError('For neighborhood list, please install the glp package from ...')
 
     allocate, update = quadratic_neighbor_list(
-        cell, cutoff, skin, capacity_multiplier=capacity_multiplier
+        cell,
+        cutoff,
+        skin,
+        capacity_multiplier=capacity_multiplier,
+        use_cell_list=True,
+        lr_cutoff=lr_cutoff,
+        buffer_size_multiplier=buffer_size_multiplier
     )
-
     neighbors = allocate(positions)
-
     return neighbors, SpatialPartitioning(allocate_fn=allocate,
                                           update_fn=jax.jit(update),
                                           cutoff=cutoff,
                                           skin=skin,
-                                          capacity_multiplier=capacity_multiplier)
+                                          capacity_multiplier=capacity_multiplier,
+                                          buffer_size_multiplier=buffer_size_multiplier,
+                                          lr_cutoff=lr_cutoff
+                                          )

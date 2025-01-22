@@ -60,6 +60,10 @@ class SpiceDataLoaderSparse:
             def keep(idx: int):
                 return idx in pick_idx
 
+        raise NotImplementedError(
+            'Loading SPICE dataset is not supported at the moment.'
+        )
+
         data = h5py.File(self.input_file)
 
         max_num_of_nodes = 0

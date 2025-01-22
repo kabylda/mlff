@@ -19,6 +19,7 @@ def evaluate(
         batch_max_num_nodes,
         batch_max_num_edges,
         batch_max_num_graphs,
+        batch_max_num_pairs,
         write_batch_metrics_to: str = None
 ):
     """Evaluate a model given its params on the testing data.
@@ -33,6 +34,7 @@ def evaluate(
         batch_max_num_nodes (): Maximal number of nodes per batch.
         batch_max_num_edges (): Maximal number of edges per batch.
         batch_max_num_graphs (): Maximal number of graphs oer batch.
+        batch_max_num_pairs (int): Maximal number of pairs in long-range indices.
         write_batch_metrics_to (str): Path to file where metrics per batch should be written to. If not given,
             batch metrics are not written to a file. Note, that the metrics are written per batch, so one-to-one
             correspondence to the original data set can only be achieved when `batch_max_num_nodes = 2` which allows
@@ -50,7 +52,9 @@ def evaluate(
         testing_data,
         n_node=batch_max_num_nodes,
         n_edge=batch_max_num_edges,
-        n_graph=batch_max_num_graphs
+        n_graph=batch_max_num_graphs,
+        n_pairs=batch_max_num_pairs,
+        # n_pairs=batch_max_num_nodes*(batch_max_num_nodes-1)//(batch_max_num_graphs)
     )
 
     # Create a collections object for the test targets.
@@ -78,18 +82,43 @@ def evaluate(
                 msk = node_mask
             elif t == 'stress':
                 msk = graph_mask
+            elif t == 'dipole_vec':
+                msk = graph_mask
+            elif t == 'hirshfeld_ratios':
+                msk = node_mask
+            elif t == 'dispersion_energy':
+                msk = graph_mask
+            elif t == 'electrostatic_energy':
+                msk = graph_mask
+            # elif t == 'electrostatic_energy':
+            #     msk = graph_mask
+            # elif t == 'dispersion_energy':
+            #     msk = graph_mask
+            # elif t == 'partial_charges':
+            #     msk = node_mask
             else:
                 raise ValueError(
                     f"Evaluate not implemented for target={t}."
                 )
-
+            # if t == 'electrostatic_energy':
+            #     print(f"electrostatic_energy output_prediction[t]: {output_prediction[t]}")
+            #     metrics_dict[f"{t}_prediction"] = output_prediction[t][msk]
+            # elif t =='dispersion_energy':
+            #     print(f"dispersion_energy output_prediction[t]: {output_prediction[t]}")
+            #     metrics_dict[f"{t}_prediction"] = output_prediction[t][msk]
+            # elif t == 'partial_charges':
+            #     print(f"partial_charges output_prediction[t]: {output_prediction[t]}")
+            #     metrics_dict[f"{t}_prediction"] = output_prediction[t][msk]
+            # else:
             metrics_dict[f"{t}_mae"] = calculate_mae(
                 y_predicted=output_prediction[t], y_true=batch_testing[t], msk=msk
             )
             metrics_dict[f"{t}_mse"] = calculate_mse(
                 y_predicted=output_prediction[t], y_true=batch_testing[t], msk=msk
             )
-
+            metrics_dict[f"{t}_true"] = batch_testing[t][msk]
+            metrics_dict[f"{t}_predicted"] = output_prediction[t][msk]
+     
         # Track the metrics per batch if they are written to file.
         if write_batch_metrics_to is not None:
             row_metrics += [jax.device_get(metrics_dict)]
@@ -111,7 +140,7 @@ def evaluate(
     }
 
     for t in testing_targets:
-        test_metrics[f'test_{t}_rmse'] = np.sqrt(test_metrics[f'test_{t}_mse'])
+        test_metrics[f'test_{t}_rmse'] = float(np.sqrt(test_metrics[f'test_{t}_mse']))
     return test_metrics
 
 

@@ -10,26 +10,19 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Sequence
 import wandb
 
-property_to_mask = {
-    'energy': 'graph_mask',
-    'stress': 'graph_mask',
-    'forces': 'node_mask',
-}
+from flax.core.frozen_dict import unfreeze
+
+from mlff.masking.mask import safe_mask
 
 
-def scaled_mse_loss(y, y_label, scale, mask):
-    full_mask = ~jnp.isnan(y_label) & jnp.expand_dims(mask, [y_label.ndim - 1 - o for o in range(0, y_label.ndim - 1)])
-    denominator = full_mask.sum().astype(y.dtype)
-    mse = (
-            jnp.sum(
-                2 * scale * optax.l2_loss(
-                    jnp.where(full_mask, y, 0).reshape(-1),
-                    jnp.where(full_mask, y_label, 0).reshape(-1),
-                )
-            )
-            / denominator
-    )
-    return mse
+def print_metrics(epoch, eval_metrics):
+    formatted_output = f"{epoch}: "
+    for key, value in eval_metrics.items():
+        if isinstance(value, np.ndarray) and value.size == 1:
+            formatted_output += f"{key}={value.item():.4f}, "
+        else:
+            formatted_output += f"{key}={', '.join(map('{:.4f}'.format, value))}, " if isinstance(value, np.ndarray) else f"{key}={value:.4f}, "
+    return formatted_output.rstrip(", ")
 
 
 def graph_mse_loss(y, y_label, batch_segments, graph_mask, scale):
@@ -61,10 +54,12 @@ def node_mse_loss(y, y_label, batch_segments, graph_mask, scale):
 
     num_graphs = graph_mask.sum().astype(y.dtype)  # ()
 
-    squared = 2 * optax.l2_loss(
-        predictions=y,
-        targets=y_label,
-    )  # same shape as y
+    squared = safe_mask(
+        fn=lambda u: jnp.square(u),
+        operand=y - y_label,
+        mask=~jnp.isnan(y_label),
+        placeholder=0.
+    )
 
     # sum up the l2_losses for node properties along the non-leading dimension. For e.g. scalar node quantities
     # this does not have any effect, but e.g. for vectorial and tensorial node properties one averages over all
@@ -84,8 +79,35 @@ def node_mse_loss(y, y_label, batch_segments, graph_mask, scale):
         jnp.asarray(0., dtype=per_graph_mse.dtype)
     )  # (num_graphs)
 
-    # Calculate mean and scale.
-    mse = scale * jnp.sum(per_graph_mse) / num_graphs  # ()
+    # Create msk that has True when data is present and is false if no data is present, i.e. y_label equals NaN.
+    # Note that padding graphs still have zero valued entries.
+    data_msk = ~jnp.isnan(
+        jax.ops.segment_max(
+            data=jnp.max(y_label.reshape(len(y_label), -1), axis=-1),
+            segment_ids=batch_segments,
+            num_segments=len(graph_mask)
+        )  # evaluates to NaN if one entry in the segment is NaN.
+    )  # (num_graphs)
+
+    # Set contributions from graphs for which no node labels are present to zero.
+    per_graph_mse = jnp.where(
+        data_msk,
+        per_graph_mse,
+        jnp.asarray(0., dtype=per_graph_mse.dtype)
+    )  # (num_graphs)
+
+    # Calculate the number of graphs that have no data present.
+    num_graphs_no_data = jnp.where(
+        data_msk,
+        jnp.asarray(0., dtype=per_graph_mse.dtype),
+        jnp.asarray(1., dtype=per_graph_mse.dtype),
+    ).sum()
+
+    # subtract the number of graphs for which no data is present.
+    num_graphs = num_graphs - num_graphs_no_data
+
+    # Calculate mean and scale. Prevent the case of division by zero if no data is present at all.
+    mse = scale * jnp.sum(per_graph_mse) / jnp.maximum(num_graphs, 1.)  # ()
 
     return mse
 
@@ -94,6 +116,8 @@ property_to_loss = {
     'energy': graph_mse_loss,
     'stress': graph_mse_loss,
     'forces': node_mse_loss,
+    'dipole_vec': graph_mse_loss,
+    'hirshfeld_ratios': node_mse_loss,
 }
 
 
@@ -120,12 +144,6 @@ def make_loss_fn(obs_fn: Callable, weights: Dict, scales: Dict = None):
         metrics = {}
         # Iterate over the targets, calculate loss and multiply with loss weights and scales.
         for target in targets:
-            # _l = scaled_mse_loss(
-            #     y=outputs_predict[target],
-            #     y_label=outputs_true[target],
-            #     scale=_scales[target],
-            #     mask=inputs[property_to_mask[target]]
-            # )
             target_loss_fn = property_to_loss[target]
             _l = target_loss_fn(
                 y=outputs_predict[target],
@@ -163,10 +181,13 @@ def make_training_step_fn(optimizer, loss_fn, log_gradient_values):
         """
         (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(params, batch)
         # if log_gradient_values:
-        #     metrics['grad_norm'] = unfreeze(jax.tree_map(lambda x: jnp.linalg.norm(x.reshape(-1), axis=0), grads))
+        metrics['grad_norm'] = unfreeze(jax.tree_map(lambda x: jnp.linalg.norm(x.reshape(-1), axis=0), grads))
         updates, opt_state = optimizer.update(grads, opt_state, params)
         params = optax.apply_updates(params=params, updates=updates)
-        metrics['grad_norm'] = optax.global_norm(grads)
+        # jax.debug.print(params)
+        # print('params', params)
+        # print('number of parameters', sum(x.size for x in jax.tree_leaves(params)))
+        # metrics['grad_norm'] = optax.global_norm(grads)
         return params, opt_state, metrics
 
     return training_step_fn
@@ -201,6 +222,7 @@ def fit(
         batch_max_num_nodes,
         batch_max_num_edges,
         batch_max_num_graphs,
+        batch_max_num_pairs,
         params=None,
         num_epochs: int = 100,
         ckpt_dir: str = None,
@@ -225,6 +247,7 @@ def fit(
         batch_max_num_nodes (int): Maximal number of nodes per batch.
         batch_max_num_edges (int): Maximal number of edges per batch.
         batch_max_num_graphs (int): Maximal number of graphs per batch.
+        batch_max_num_pairs (int): Maximal number of pairs in long-range indices.
         params: Parameters to start from during training. If not given, either new parameters are initialized randomly
             or loaded from ckpt_dir if the checkpoint already exists and `allow_restart=True`.
         num_epochs (int): Number of training epochs.
@@ -274,13 +297,13 @@ def fit(
     for epoch in range(num_epochs):
         # Shuffle the training data.
         numpy_rng.shuffle(training_data)
-
         # Create batched graphs from list of graphs.
         iterator_training = jraph.dynamically_batch(
             training_data,
             n_node=batch_max_num_nodes,
             n_edge=batch_max_num_edges,
-            n_graph=batch_max_num_graphs
+            n_graph=batch_max_num_graphs,
+            n_pairs=batch_max_num_pairs,
         )
 
         # Start iteration over batched graphs.
@@ -334,7 +357,8 @@ def fit(
                     validation_data,
                     n_node=batch_max_num_nodes,
                     n_edge=batch_max_num_edges,
-                    n_graph=batch_max_num_graphs
+                    n_graph=batch_max_num_graphs,
+                    n_pairs=batch_max_num_pairs,
                 )
 
                 # Start iteration over validation batches.
@@ -367,6 +391,9 @@ def fit(
                     f'eval_{k}': float(v) for k, v in eval_metrics.items()
                 }
 
+                # Print eval_metrics
+                print(print_metrics(f"val_{epoch}_{step}:", eval_metrics))
+
                 # Save checkpoint.
                 ckpt_mngr.save(
                     step,
@@ -396,6 +423,7 @@ def fit_from_iterator(
         batch_max_num_nodes,
         batch_max_num_edges,
         batch_max_num_graphs,
+        batch_max_num_pairs,
         params=None,
         ckpt_dir: str = None,
         ckpt_manager_options: dict = None,
@@ -419,6 +447,7 @@ def fit_from_iterator(
         batch_max_num_nodes (int): Maximal number of nodes per batch.
         batch_max_num_edges (int): Maximal number of edges per batch.
         batch_max_num_graphs (int): Maximal number of graphs per batch.
+        batch_max_num_pairs (int): Maximal number of pairs in long-range indices.
         params: Parameters to start from during training. If not given, either new parameters are initialized randomly
             or loaded from ckpt_dir if the checkpoint already exists and `allow_restart=True`.
         ckpt_dir (str): Checkpoint path.
@@ -470,7 +499,8 @@ def fit_from_iterator(
         training_iterator.as_numpy_iterator(),
         n_node=batch_max_num_nodes,
         n_edge=batch_max_num_edges,
-        n_graph=batch_max_num_graphs
+        n_graph=batch_max_num_graphs,
+        n_pairs=batch_max_num_pairs
     )
 
     # Start iteration over batched graphs.
@@ -524,7 +554,8 @@ def fit_from_iterator(
                 validation_iterator.as_numpy_iterator(),
                 n_node=batch_max_num_nodes,
                 n_edge=batch_max_num_edges,
-                n_graph=batch_max_num_graphs
+                n_graph=batch_max_num_graphs,
+                n_pairs=batch_max_num_pairs
             )
 
             # Start iteration over validation batches.
