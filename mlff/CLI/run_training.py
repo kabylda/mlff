@@ -21,6 +21,7 @@ def train_so3krates_sparse():
         with open(config, mode='r') as fp:
             cfg = config_dict.ConfigDict(yaml.load(fp, Loader=yaml.FullLoader))
 
+    from_config.check_config(cfg)
     from_config.run_training(cfg)
 
 

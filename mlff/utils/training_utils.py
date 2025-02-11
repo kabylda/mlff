@@ -1,18 +1,19 @@
 import clu.metrics as clu_metrics
-from flax import traverse_util
 import jraph
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from orbax import checkpoint
-from pathlib import Path
-from typing import Any, Callable, Dict, Sequence
+import orbax.checkpoint as ocp
 import wandb
 
+from flax import traverse_util
 from flax.core.frozen_dict import unfreeze
+from pathlib import Path
+from typing import Any, Callable, Dict, Sequence
 
-from mlff.masking.mask import safe_mask
+from ..utils import gradient_utils
+from ..utils import checkpoint_utils
 
 
 def print_metrics(epoch, eval_metrics):
@@ -54,7 +55,7 @@ def node_mse_loss(y, y_label, batch_segments, graph_mask, scale):
 
     num_graphs = graph_mask.sum().astype(y.dtype)  # ()
 
-    squared = safe_mask(
+    squared = gradient_utils.safe_mask(
         fn=lambda u: jnp.square(u),
         operand=y - y_label,
         mask=~jnp.isnan(y_label),
@@ -164,9 +165,31 @@ def make_loss_fn(obs_fn: Callable, weights: Dict, scales: Dict = None):
     return loss_fn
 
 
-def make_training_step_fn(optimizer, loss_fn, log_gradient_values):
+def make_training_step_fn(
+        optimizer: optax.GradientTransformation,
+        loss_fn: Callable,
+        log_gradient_values: bool
+):
+    """
+    Make a training step fn, which takes params, optimizer state, and a batch of data and returns
+    new params based on the gradients according to the loss_fn, new optimizer state and metrics.
+
+    Args:
+        optimizer (optax.GradientTransformation): Optax optimizer.
+        loss_fn (Callable): Loss function.
+        log_gradient_values (bool): Log gradient values for each leaf in the params pytree.
+
+    Returns:
+        Training step fn.
+
+    """
+
     @jax.jit
-    def training_step_fn(params, opt_state, batch):
+    def training_step_fn(
+            params,
+            opt_state,
+            batch
+    ):
         """
         Training step.
 
@@ -179,21 +202,48 @@ def make_training_step_fn(optimizer, loss_fn, log_gradient_values):
             Updated state and metrics.
 
         """
-        (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(params, batch)
-        # if log_gradient_values:
-        metrics['grad_norm'] = unfreeze(jax.tree_map(lambda x: jnp.linalg.norm(x.reshape(-1), axis=0), grads))
-        updates, opt_state = optimizer.update(grads, opt_state, params)
-        params = optax.apply_updates(params=params, updates=updates)
-        # jax.debug.print(params)
-        # print('params', params)
-        # print('number of parameters', sum(x.size for x in jax.tree_leaves(params)))
-        # metrics['grad_norm'] = optax.global_norm(grads)
+        (loss, metrics), grads = jax.value_and_grad(
+            loss_fn,
+            has_aux=True
+        )(
+            params,
+            batch
+        )
+
+        if log_gradient_values:
+            metrics['grad_norm'] = unfreeze(jax.tree_map(lambda x: jnp.linalg.norm(x.reshape(-1), axis=0), grads))
+
+        updates, opt_state = optimizer.update(
+            grads,
+            opt_state,
+            params
+        )
+
+        params = optax.apply_updates(
+            params=params,
+            updates=updates
+        )
+
+        metrics['grad_norm'] = optax.global_norm(grads)
+
         return params, opt_state, metrics
 
     return training_step_fn
 
 
-def make_validation_step_fn(metric_fn):
+def make_validation_step_fn(
+        metric_fn: Callable
+):
+    """
+    Make validation step function, which takes params and batch of data as input and returns metrics.
+
+    Args:
+        metric_fn (Callable): Function that calculates metrics, given params and batch of data.
+
+    Returns:
+        Validation step function.
+
+    """
     @jax.jit
     def validation_step_fn(params, batch) -> Dict[str, jnp.ndarray]:
         """
@@ -206,7 +256,11 @@ def make_validation_step_fn(metric_fn):
         Returns:
             Validation metrics.
         """
-        _, metrics = metric_fn(params, batch)
+        _, metrics = metric_fn(
+            params,
+            batch
+        )
+
         return metrics
 
     return validation_step_fn
@@ -273,21 +327,27 @@ def fit(
     if ckpt_manager_options is None:
         ckpt_manager_options = {'max_to_keep': 1}
 
-    options = checkpoint.CheckpointManagerOptions(
+    options = ocp.CheckpointManagerOptions(
         best_fn=lambda u: u['loss'],
         best_mode='min',
         step_prefix='ckpt',
         **ckpt_manager_options
     )
 
-    ckpt_mngr = checkpoint.CheckpointManager(
-        ckpt_dir,
-        item_names=('params', ),
-        options=options
+    ckpt_mngr = checkpoint_utils.make_checkpoint_manager(
+        ckpt_dir=ckpt_dir,
+        ckpt_mngr_options=options
     )
 
-    training_step_fn = make_training_step_fn(optimizer, loss_fn, log_gradient_values)
-    validation_step_fn = make_validation_step_fn(loss_fn)
+    training_step_fn = make_training_step_fn(
+        optimizer,
+        loss_fn,
+        log_gradient_values
+    )
+
+    validation_step_fn = make_validation_step_fn(
+        loss_fn
+    )
 
     processed_graphs = 0
     processed_nodes = 0
@@ -320,10 +380,13 @@ def fit(
                 latest_step = ckpt_mngr.latest_step()
                 if latest_step is not None:
                     if allow_restart:
-                        params = ckpt_mngr.restore(
-                            latest_step,
-                            args=checkpoint.args.Composite(params=checkpoint.args.StandardRestore())
-                        )['params']
+                        # params = ckpt_mngr.restore(
+                        #     latest_step,
+                        #     args=ocp.args.Composite(params=ocp.args.StandardRestore())
+                        # )['params']
+                        params = checkpoint_utils.load_params_from_checkpoint(
+                            ckpt_dir=ckpt_dir
+                        )
                         step += latest_step
                         print(f'Re-start training from {latest_step}.')
                     else:
@@ -397,8 +460,10 @@ def fit(
                 # Save checkpoint.
                 ckpt_mngr.save(
                     step,
-                    args=checkpoint.args.Composite(params=checkpoint.args.StandardSave(params)),
-                    metrics={'loss': eval_metrics['eval_loss']}
+                    args=ocp.args.Composite(params=ocp.args.StandardSave(params)),
+                    metrics={
+                        'loss': eval_metrics['eval_loss']
+                    }
                 )
 
                 # Log to weights and bias.
@@ -461,6 +526,7 @@ def fit_from_iterator(
     Returns:
 
     """
+    del training_seed
     # numpy_rng = np.random.RandomState(seed=training_seed)
     jax_rng = jax.random.PRNGKey(seed=model_seed)
 
@@ -472,21 +538,27 @@ def fit_from_iterator(
     if ckpt_manager_options is None:
         ckpt_manager_options = {'max_to_keep': 1}
 
-    options = checkpoint.CheckpointManagerOptions(
+    options = ocp.CheckpointManagerOptions(
         best_fn=lambda u: u['loss'],
         best_mode='min',
         step_prefix='ckpt',
         **ckpt_manager_options
     )
 
-    ckpt_mngr = checkpoint.CheckpointManager(
-        ckpt_dir,
-        item_names=('params', ),
-        options=options
+    ckpt_mngr = checkpoint_utils.make_checkpoint_manager(
+        ckpt_dir=ckpt_dir,
+        ckpt_mngr_options=options
     )
 
-    training_step_fn = make_training_step_fn(optimizer, loss_fn, log_gradient_values)
-    validation_step_fn = make_validation_step_fn(loss_fn)
+    training_step_fn = make_training_step_fn(
+        optimizer,
+        loss_fn,
+        log_gradient_values
+    )
+
+    validation_step_fn = make_validation_step_fn(
+        loss_fn
+    )
 
     processed_graphs = 0
     processed_nodes = 0
@@ -517,10 +589,13 @@ def fit_from_iterator(
             latest_step = ckpt_mngr.latest_step()
             if latest_step is not None:
                 if allow_restart:
-                    params = ckpt_mngr.restore(
-                        latest_step,
-                        args=checkpoint.args.Composite(params=checkpoint.args.StandardRestore())
-                    )['params']
+                    params = checkpoint_utils.load_params_from_checkpoint(
+                        ckpt_dir=ckpt_dir
+                    )
+                    # params = ckpt_mngr.restore(
+                    #     latest_step,
+                    #     args=checkpoint.args.Composite(params=checkpoint.args.StandardRestore())
+                    # )['params']
                     step += latest_step
                     print(f'Re-start training from {latest_step}.')
                 else:
@@ -591,8 +666,10 @@ def fit_from_iterator(
             # Save checkpoint.
             ckpt_mngr.save(
                 step,
-                args=checkpoint.args.Composite(params=checkpoint.args.StandardSave(params)),
-                metrics={'loss': eval_metrics['eval_loss']}
+                args=ocp.args.Composite(params=ocp.args.StandardSave(params)),
+                metrics={
+                    'loss': eval_metrics['eval_loss']
+                }
             )
 
             # Log to weights and bias.
@@ -632,14 +709,34 @@ def make_optimizer(
     Returns:
 
     """
-    opt = getattr(optax, name)
-    lr_schedule = getattr(optax, learning_rate_schedule)
+    lr_schedule = getattr(
+        optax,
+        learning_rate_schedule
+    )
 
-    lr_schedule = lr_schedule(learning_rate, **learning_rate_schedule_args)
-    opt = opt(lr_schedule, **optimizer_args)
+    lr_schedule = lr_schedule(
+        learning_rate,
+        **learning_rate_schedule_args
+    )
 
-    clip_transform = getattr(optax, gradient_clipping)
-    clip_transform = clip_transform(**gradient_clipping_args)
+    opt = getattr(
+        optax,
+        name
+    )
+
+    opt = opt(
+        lr_schedule,
+        **optimizer_args
+    )
+
+    clip_transform = getattr(
+        optax,
+        gradient_clipping
+    )
+
+    clip_transform = clip_transform(
+        **gradient_clipping_args
+    )
 
     return optax.chain(
         clip_transform,

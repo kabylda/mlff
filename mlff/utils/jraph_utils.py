@@ -28,10 +28,12 @@ def batch_info_fn(batched_graph: jraph.GraphsTuple):
         total_repeat_length=len(node_mask)
     )
 
-    return dict(node_mask=node_mask,
-                graph_mask=graph_mask,
-                batch_segments=batch_segments,
-                num_of_non_padded_graphs=num_of_non_padded_graphs)
+    return dict(
+        node_mask=node_mask,
+        graph_mask=graph_mask,
+        batch_segments=batch_segments,
+        num_of_non_padded_graphs=num_of_non_padded_graphs
+    )
 
 
 @jax.jit
@@ -56,3 +58,17 @@ def graph_to_batch_fn(graph: jraph.GraphsTuple):
     batch_info = batch_info_fn(graph)
     batch.update(batch_info)
     return batch
+
+
+def graph_to_inputs_fn(graph: jraph.GraphsTuple):
+    """
+    Wrapper around graph_to_batch_fn.
+
+    Args:
+        graph ():
+
+    Returns:
+        Dictionary representation of the graph.
+
+    """
+    return graph_to_batch_fn(graph)

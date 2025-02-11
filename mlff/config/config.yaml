@@ -2,13 +2,16 @@ workdir: first_experiment  # Working directory. Checkpoints and hyperparameters 
 data:
   filepath: null  # Path to the data file. Either ASE digestible or .npz with appropriate column names are supported.
   energy_unit: eV  # Energy unit.
-  length_unit: Angstrom  # Length unit. Is converted to the data set units internally.
+  length_unit: Angstrom  # Length unit.
+  electric_charge_unit: e  # Electric charge unit.
+  dipole_vec_unit: e * Angstrom  # Dipole vector unit.
   shift_mode: null  # Options are null, mean, custom.
-  energy_shifts: null  # Energy shifts to subtract.
+  energy_shifts: null  # Energy shifts in eV to subtract.
   neighbors_lr_bool: false  # Calculate long-range neighborhood indices. Required for modules like DispersionEnergy.
-  neighbors_lr_cutoff: null  # Cutoff for calculating the long-range neighborhoods. Note that it is not required to be
-  # equal to the lr_cutoff of the model. E.g. one can calculate neighbors up to 50 Ang and use no long-range cutoff
-  # in the model during training at all. More details see README.
+  neighbors_lr_cutoff: null  # Cutoff for calculating the long-range neighborhoods in Angstrom. Is converted to the
+  # data set units internally. Note that it is not required to be equal to the lr_cutoff of the model.
+  # E.g. one can calculate neighbors up to 50 Ang and use no long-range cutoff in the model during training at all.
+  # More details see README.
   filter:
     min_distance: 0.75  # Minimal allowed distance in Angstrom. Is converted to the data set units internally.
     max_force: 25.  # Maximal allowed force component in eV/Angstrom. Is converted to the data set units internally.
@@ -25,8 +28,8 @@ model:
     - 4
   cutoff: 5.0  # Local cutoff to use.
   cutoff_fn: cosine  # Cutoff function to use.
-  cutoff_lr: null  # Long-range cutoff used in the long range modules. It is possible to use no long range cutoff in
-  # the modules. Details see README.
+  cutoff_lr: null  # Long-range cutoff used in the long range electrostatic and dispersion modules.
+  # It is possible to use no long range cutoff in the modules. Details see README.
   num_radial_basis_fn: 32  # Number of radial basis functions.
   radial_basis_fn: physnet  # Radial basis function to use.
   activation_fn: silu  # Activation function used in the MLPs.
@@ -84,6 +87,7 @@ training:
   model_seed: 0  # Seed used for the initialization of the model parameters.
   training_seed: 0  # Seed used for shuffling the batches during training.
   log_gradient_values: False  # Log the norm of the gradients for each set of weights.
+  use_wandb: true  # Use wandb for logging.
   wandb_init_args:  # Arguments to wandb.init(). See https://docs.wandb.ai/ref/python/init. The config itself is passed as config to wandb.init().
     name: first_training_run
     project: mlff

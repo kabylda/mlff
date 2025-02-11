@@ -6,11 +6,13 @@ from typing import Dict, Sequence
 
 def unit_conversion_graph(
         g,
-        energy_unit: float = units.eV,
-        length_unit: float = units.Angstrom
+        energy_unit: float,
+        length_unit: float,
+        dipole_vec_unit: float
 ):
     _energy_unit = np.asarray(energy_unit)
     _length_unit = np.asarray(length_unit)
+    _dipole_vec_unit = np.asarray(dipole_vec_unit)
 
     g.globals['energy'] = g.globals.get('energy') * _energy_unit
     g.globals['stress'] = g.globals.get('stress') * _energy_unit / np.power(_length_unit, 3)
@@ -18,29 +20,29 @@ def unit_conversion_graph(
     g.nodes['forces'] = g.nodes.get('forces') * _energy_unit / _length_unit
     g.nodes['positions'] = g.nodes.get('positions') * _length_unit
 
-    # if g.globals.get('stress') is not None:
-    # if not np.isnan(g.globals['stress']).any() is True:
-    #     raise NotImplementedError('Unit conversion for stress not implemented yet.')
+    g.globals['dipole_vec'] = g.globals.get('dipole_vec') * _dipole_vec_unit
+
     return g
 
 
 def unit_conversion(
         x: Sequence[jraph.GraphsTuple],
-        energy_unit: float = units.eV,
-        length_unit: float = units.Angstrom
+        energy_unit: float,
+        length_unit: float,
+        dipole_vec_unit: float
 ):
     _energy_unit = np.asarray(energy_unit)
     _length_unit = np.asarray(length_unit)
+    _dipole_vec_unit = np.asarray(dipole_vec_unit)
+
     for g in x:
         g.globals['energy'] = g.globals.get('energy') * _energy_unit
         g.globals['stress'] = g.globals.get('stress') * _energy_unit / np.power(_length_unit, 3)
 
         g.nodes['forces'] = g.nodes.get('forces') * _energy_unit / _length_unit
         g.nodes['positions'] = g.nodes.get('positions') * _length_unit
+        g.globals['dipole_vec'] = g.globals.get('dipole_vec') * _dipole_vec_unit
 
-        # if g.globals.get('stress') is not None:
-        # if not np.isnan(g.globals['stress']).any() is True:
-        #     raise NotImplementedError('Unit conversion for stress not implemented yet.')
         yield g
 
 

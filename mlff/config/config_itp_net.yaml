@@ -77,6 +77,7 @@ training:
   model_seed: 0  # Seed used for the initialization of the model parameters.
   training_seed: 0  # Seed used for shuffling the batches during training.
   log_gradient_values: False  # Log the norm of the gradients for each set of weights.
+  use_wandb: true  # Use wandb for logging.
   wandb_init_args:  # Arguments to wandb.init(). See https://docs.wandb.ai/ref/python/init. The config itself is passed as config to wandb.init().
     name: first_itp_training_run
     project: mlff

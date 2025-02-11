@@ -8,14 +8,14 @@ from mlff import jraph_utils
 from mlff.nn.stacknet.observable_function_sparse import get_energy_and_force_fn_sparse
 from ml_collections import config_dict
 import numpy as np
-from orbax import checkpoint
 from pathlib import Path
 from typing import Sequence
-import wandb
 import yaml
 import logging
 import os
 from functools import partial, partialmethod
+
+from ..utils import checkpoint_utils
 
 logging.MLFF = 35
 logging.addLevelName(logging.MLFF, 'MLFF')
@@ -165,124 +165,22 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
     workdir = workdir_from_config(config=config)
     workdir.mkdir(exist_ok=config.training.allow_restart)
 
+    # Update the workdir in config with absolute path.
+    config.workdir = str(workdir)
+
     # Currently, training is always performed with sparse neighborlist_format for long range blocks.
     config.neighborlist_format_lr = config_dict.placeholder(str)
     config.neighborlist_format_lr = 'sparse'
 
-    # TFDSDataSets need to be processed in a special manner.
-    # tf_record_present = False
-
     loader, tf_record_present = data_loader_from_config(
         config=config
     )
-
-    if config.data.neighbors_lr_bool is True:
-        if tf_record_present is True:
-            raise NotImplementedError(
-                "long-range neighbors are not supported for tf record data loader yet."
-            )
 
     training_data, validation_data, data_stats = prepare_training_and_validation_data(
         config=config,
         loader=loader,
         tf_record_present=tf_record_present
     )
-
-    # Get the total number of data points
-    # num_data = loader.cardinality()
-    # num_train = config.training.num_train
-    # num_valid = config.training.num_valid
-    #
-    # if num_train + num_valid > num_data:
-    #     raise ValueError(f"num_train + num_valid = {num_train + num_valid} exceeds the number of data points {num_data}"
-    #                      f" in {data_filepath}.")
-    #
-    # split_seed = config.data.split_seed
-    # if not tf_record_present:
-    #     numpy_rng = np.random.RandomState(split_seed)
-    #
-    #     # Choose the data points that are used training (training + validation data).
-    #     all_indices = np.arange(num_data)
-    #     numpy_rng.shuffle(all_indices)
-    #     # We sort the indices after extracting them from the shuffled list, since we iteratively load the data with the
-    #     # data loader. This will ensure that the index i at the n-th entry in training_and_validation_indices
-    #     # corresponds to the n-th entry in training_and_validation_data which is the i-th data entry in the loaded data.
-    #     training_and_validation_indices = np.sort(all_indices[:(num_train+num_valid)])
-    #     test_indices = np.sort(all_indices[(num_train+num_valid):])
-    #
-    #     # Cutoff is in Angstrom, so we have to divide the cutoff by the length unit.
-    #     training_and_validation_data, data_stats = loader.load(
-    #         cutoff=config.model.cutoff / length_unit,
-    #         cutoff_lr=config.data.neighbors_lr_cutoff / length_unit,
-    #         calculate_neighbors_lr=config.data.neighbors_lr_bool,
-    #         pick_idx=training_and_validation_indices
-    #     )
-    #     # Since the training and validation indices are sorted, the index i at the n-th entry in
-    #     # training_and_validation_indices corresponds to the n-th entry in training_and_validation_data which is the
-    #     # i-th data entry in the loaded data.
-    #     split_indices = np.arange(num_train + num_valid)
-    #     numpy_rng.shuffle(split_indices)
-    #     internal_train_indices = split_indices[:num_train]
-    #     internal_validation_indices = split_indices[num_train:]
-    #
-    #     # Entries are None when filtered out.
-    #     training_data = [
-    #         training_and_validation_data[i_train] for i_train in internal_train_indices if training_and_validation_data[i_train] is not None
-    #     ]
-    #     validation_data = [
-    #         training_and_validation_data[i_val] for i_val in internal_validation_indices if training_and_validation_data[i_val] is not None
-    #     ]
-    #     del training_and_validation_data
-    #
-    #     assert len(internal_train_indices) == num_train
-    #     assert len(internal_validation_indices) == num_valid
-    #
-    #     # internal_*_indices only run from [0, num_train+num_valid]. To get their original position in the full data set
-    #     # we collect them from training_and_validation_indices. Since we will load training and validation data as
-    #     # training_and_validation_data[internal_*_indices], we need to make sure that training_and_validation_indices
-    #     # and training_and_validation_data have the same order in the sense of referencing indices. This is achieved by
-    #     # sorting the indices as described above.
-    #     train_indices = training_and_validation_indices[internal_train_indices]
-    #     validation_indices = training_and_validation_indices[internal_validation_indices]
-    #
-    #     assert len(train_indices) == num_train
-    #     assert len(validation_indices) == num_valid
-    #
-    #     # Save the splits.
-    #     with open(workdir / 'data_splits.json', 'w') as fp:
-    #         j = dict(
-    #             training=train_indices.tolist(),
-    #             validation=validation_indices.tolist(),
-    #             test=test_indices.tolist()
-    #         )
-    #         json.dump(j, fp)
-    # # tensorflow records are present
-    # else:
-    #     training_data, validation_data = loader.load(
-    #         cutoff=config.model.cutoff / length_unit,
-    #         num_train=num_train,
-    #         num_valid=num_valid
-    #     )
-    #     # Save the splits.
-    #     with open(workdir / 'data_splits.json', 'w') as fp:
-    #         j = dict(
-    #             training='tfds',
-    #             validation='tfds',
-    #             test='tfds',
-    #         )
-    #         json.dump(j, fp)
-
-    # if config.data.shift_mode == 'mean':
-    #     config.data.energy_shifts = config_dict.placeholder(dict)
-    #     energy_mean = np.array(data.transformations.calculate_energy_mean(training_data)).item() * energy_unit
-    #     num_nodes = np.array(data.transformations.calculate_average_number_of_nodes(training_data)).item()
-    #     energy_shifts = {str(a): float(energy_mean / num_nodes) for a in range(119)}
-    #     config.data.energy_shifts = energy_shifts
-    # elif config.data.shift_mode == 'custom':
-    #     if config.data.energy_shifts is None:
-    #         raise ValueError('For config.data.shift_mode == custom config.data.energy_shifts must be given.')
-    # else:
-    #     config.data.energy_shifts = {str(a): 0. for a in range(119)}
 
     # If messages are normalized by the average number of neighbors, we need to calculate this quantity from the
     # training data or read it from the config when provided.
@@ -307,66 +205,6 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
             avg_num_neighbors = np.array(data.transformations.calculate_average_number_of_neighbors(training_data))
             config.data.avg_num_neighbors = np.array(avg_num_neighbors).item()
             logging.mlff('... done.')
-
-    # if not tf_record_present:
-    #     training_data = list(data.transformations.subtract_atomic_energy_shifts(
-    #         data.transformations.unit_conversion(
-    #             training_data,
-    #             energy_unit=energy_unit,
-    #             length_unit=length_unit
-    #         ),
-    #         atomic_energy_shifts={int(k): v for (k, v) in config.data.energy_shifts.items()}
-    #     ))
-    #
-    #     validation_data = list(data.transformations.subtract_atomic_energy_shifts(
-    #         data.transformations.unit_conversion(
-    #             validation_data,
-    #             energy_unit=energy_unit,
-    #             length_unit=length_unit
-    #         ),
-    #         atomic_energy_shifts={int(k): v for (k, v) in config.data.energy_shifts.items()}
-    #     ))
-    # else:
-    #     if config.data.shift_mode in ['custom', 'mean']:
-    #         raise NotImplementedError(
-    #             'For TFDSDataSets, energy shifting is not supported yet.'
-    #         )
-    #
-    #     # Convert the units.
-    #     training_data = training_data.map(
-    #         lambda graph: data.transformations.unit_conversion_graph(
-    #             graph,
-    #             energy_unit=energy_unit,
-    #             length_unit=length_unit
-    #         )
-    #     )
-    #     validation_data = validation_data.map(
-    #         lambda graph: data.transformations.unit_conversion_graph(
-    #             graph,
-    #             energy_unit=energy_unit,
-    #             length_unit=length_unit
-    #         )
-    #     )
-    #     #
-    #     # # Subtract energy shifts.
-    #     # train_ds = train_ds.map(
-    #     #     lambda graph: subtract_atomic_energy_shift_graph(
-    #     #         graph,
-    #     #         atomic_energy_shifts=np.zeros((119,), dtype=float)
-    #     #     )
-    #     # )
-    #     # valid_ds = valid_ds.map(
-    #     #     lambda graph: subtract_atomic_energy_shift_graph(
-    #     #         graph,
-    #     #         atomic_energy_shifts=np.zeros((119,), dtype=float)
-    #     #     )
-    #     # )
-    #
-    #     training_data = training_data.shuffle(
-    #         buffer_size=10_000,
-    #         reshuffle_each_iteration=True,
-    #         seed=config.training.training_seed
-    #     ).repeat(config.training.num_epochs)
 
     opt = make_optimizer_from_config(config)
     if model == 'so3krates':
@@ -401,10 +239,6 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
 
     if config.training.batch_max_num_pairs is None:
         if config.data.neighbors_lr_bool is True:
-            if tf_record_present:
-                raise NotImplementedError(
-                    "long-range neighbors are not supported for tf record data loader yet."
-                )
             # TODO: This always creates num_pairs to be quadratic in the number of nodes. Add data_stats about max
             #  num_pairs which is important for the case of lr_cutoff smaller than largest separation in the data
             #  as this allows to safe cost.
@@ -423,7 +257,12 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
     with open(workdir / "hyperparameters.yaml", "w") as yaml_file:
         yaml.dump(config.to_dict(), yaml_file, default_flow_style=False)
 
-    wandb.init(config=config.to_dict(), **config.training.wandb_init_args)
+    # Initialize wandb if needed.
+    use_wandb = config.training.use_wandb
+    if use_wandb is True:
+        import wandb
+        wandb.init(config=config.to_dict(), **config.training.wandb_init_args)
+
     logging.mlff('Training is starting!')
     if not tf_record_present:
         training_utils.fit(
@@ -443,7 +282,8 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
             num_epochs=config.training.num_epochs,
             training_seed=config.training.training_seed,
             model_seed=config.training.model_seed,
-            log_gradient_values=config.training.log_gradient_values
+            log_gradient_values=config.training.log_gradient_values,
+            use_wandb=use_wandb
         )
     else:
         training_utils.fit_from_iterator(
@@ -462,7 +302,8 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
             allow_restart=config.training.allow_restart,
             training_seed=config.training.training_seed,
             model_seed=config.training.model_seed,
-            log_gradient_values=config.training.log_gradient_values
+            log_gradient_values=config.training.log_gradient_values,
+            use_wandb=use_wandb
         )
     logging.mlff('Training has finished!')
 
@@ -497,70 +338,18 @@ def run_evaluation(
     Returns:
         The metrics on `testing_targets`.
     """
-    energy_unit = eval(config.data.energy_unit)
-    length_unit = eval(config.data.length_unit)
+    energy_unit = energy_unit_from_config(config=config)
+    length_unit = length_unit_from_config(config=config)
+    dipole_vec_unit = dipole_vec_unit_from_config(config=config)
 
     data_filepath = config.data.filepath
-    data_filepath = Path(data_filepath).expanduser().absolute().resolve()
+    data_filepath = Path(data_filepath).expanduser().resolve()
 
     targets = testing_targets if testing_targets is not None else list(config.training.loss_weights.keys())
 
     loader, tf_record_present = data_loader_from_config(
         config=config
     )
-
-    if config.data.neighbors_lr_bool is True:
-        if tf_record_present is True:
-            raise NotImplementedError(
-                "long-range neighbors are not supported for tf record data loader yet."
-            )
-
-    # TFDSDataSets need to be processed in a special manner.
-    # tf_record_present = False
-
-    # if data_filepath.suffix == '.npz':
-    #     loader = data.NpzDataLoaderSparse(input_file=data_filepath)
-    # elif data_filepath.stem[:5].lower() == 'spice':
-    #     logging.mlff(f'Found SPICE dataset at {data_filepath}.')
-    #     if data_filepath.suffix != '.hdf5':
-    #         raise ValueError(
-    #             f'Loader assumes that SPICE is in hdf5 format. Found {data_filepath.suffix} as'
-    #             f'suffix.')
-    #     loader = data.SpiceDataLoaderSparse(input_file=data_filepath)
-    # # elif data_filepath.stem[:4].lower() == 'qcml':
-    # #     logging.mlff(f'Found QCML dataset at {data_filepath}.')
-    # #     if data_filepath.suffix != '.hdf5':
-    # #         raise ValueError(
-    # #             f'Loader assumes that QCML is in hdf5 format. Found {data_filepath.suffix} as'
-    # #             f'suffix.')
-    # #     loader = data.QCMLLoaderSparse(
-    # #         input_file=data_filepath,
-    # #         # We need to do the inverse transforms, since in config everything is in ASE default units.
-    # #         min_distance_filter=config.data.filter.min_distance / length_unit,
-    # #         max_force_filter=config.data.filter.max_force / energy_unit * length_unit,
-    # #     )
-    # elif data_filepath.is_dir():
-    #     tf_record_present = len([1 for x in os.scandir(data_filepath) if Path(x).suffix[:9] == '.tfrecord']) > 0
-    #     if tf_record_present:
-    #         loader = data.TFDSDataLoaderSparse(
-    #             input_file=data_filepath,
-    #             split='train',
-    #             max_force_filter=config.data.filter.max_force / energy_unit * length_unit
-    #         )
-    #     else:
-    #         raise ValueError(
-    #             f"Specifying a directory for `data_filepath` is only supported for directories that contain .tfrecord "
-    #             f"files. No .tfrecord files found at {data_filepath}."
-    #         )
-    #     # if tf_record_present:
-    #     #     loader = data.TFRecordDataLoaderSparse(
-    #     #         input_file=data_filepath,
-    #     #         # We need to do the inverse transforms, since in config everything is in ASE default units.
-    #     #         min_distance_filter=config.data.filter.min_distance / length_unit,
-    #     #         max_force_filter=config.data.filter.max_force / energy_unit * length_unit,
-    #     #     )
-    # else:
-    #     loader = data.AseDataLoaderSparse(input_file=data_filepath)
 
     if not tf_record_present:
         eval_data, data_stats = loader.load(
@@ -575,6 +364,8 @@ def run_evaluation(
             cutoff=config.model.cutoff / length_unit,
             num_train=config.training.num_train,
             num_valid=config.training.num_valid,
+            cutoff_lr=config.data.neighbors_lr_cutoff / length_unit if config.data.neighbors_lr_bool is True else None,
+            calculate_neighbors_lr=config.data.neighbors_lr_bool,
             num_test=num_test,
             return_test=True,
         )
@@ -591,7 +382,7 @@ def run_evaluation(
             )
         else:
             raise ValueError(
-                f'{on_split} is not a valid split string. Choose one of (training, validation, test).'
+                f'{on_split} is not a valid split string. Choose one of (training, validation, test, full).'
             )
 
     if not tf_record_present:
@@ -614,7 +405,8 @@ def run_evaluation(
             data.transformations.unit_conversion(
                 eval_data[:num_test],
                 energy_unit=energy_unit,
-                length_unit=length_unit
+                length_unit=length_unit,
+                dipole_vec_unit=dipole_vec_unit
             ),
             atomic_energy_shifts={int(k): v for (k, v) in config.data.energy_shifts.items()}
         )
@@ -627,23 +419,42 @@ def run_evaluation(
 
         config.training.batch_max_num_nodes = batch_max_num_nodes
         config.training.batch_max_num_edges = batch_max_num_edges
+    else:
+        testing_data = eval_data.map(
+            lambda graph: data.transformations.unit_conversion_graph(
+                graph,
+                energy_unit=energy_unit,
+                length_unit=length_unit,
+                dipole_vec_unit=dipole_vec_unit
+            )
+        )
 
     ckpt_dir = Path(config.workdir) / 'checkpoints'
     ckpt_dir = ckpt_dir.expanduser().resolve()
     logging.mlff(f'Restore parameters from {ckpt_dir} ...')
-    ckpt_mngr = checkpoint.CheckpointManager(
-        ckpt_dir,
-        {'params': checkpoint.PyTreeCheckpointer()},
-        options=checkpoint.CheckpointManagerOptions(step_prefix='ckpt')
-    )
-    latest_step = ckpt_mngr.latest_step()
-    if latest_step is not None:
-        params = ckpt_mngr.restore(
-            latest_step,
-            items=None
-        )['params']
-    else:
-        raise FileNotFoundError(f'No checkpoint found at {ckpt_dir}.')
+
+    # ckpt_mngr = checkpoint.CheckpointManager(
+    #     ckpt_dir,
+    #     item_names=('params',),
+    #     item_handlers={'params': checkpoint.StandardCheckpointHandler()},
+    #     options=checkpoint.CheckpointManagerOptions(step_prefix='ckpt')
+    # )
+    #
+    # # ckpt_mngr = checkpoint.CheckpointManager(
+    # #     ckpt_dir,
+    # #     {'params': checkpoint.PyTreeCheckpointer()},
+    # #     options=checkpoint.CheckpointManagerOptions(step_prefix='ckpt')
+    # # )
+    # latest_step = ckpt_mngr.latest_step()
+    # if latest_step is not None:
+    #     params = ckpt_mngr.restore(
+    #         latest_step,
+    #         items=None
+    #     )['params']
+    # else:
+    #     raise FileNotFoundError(f'No checkpoint found at {ckpt_dir}.')
+    params = checkpoint_utils.load_params_from_checkpoint(ckpt_dir=ckpt_dir)
+
     logging.mlff(f'... done.')
 
     if model == 'so3krates':
@@ -737,6 +548,9 @@ def run_fine_tuning(
         )
     workdir.mkdir(exist_ok=False)
 
+    # Update the workdir in config with absolute path.
+    config.workdir = str(workdir)
+
     # Save fine-tuning hyper-parameters.
     with open(workdir / 'fine_tuning.json', mode='w') as fp:
         json.dump(
@@ -748,7 +562,7 @@ def run_fine_tuning(
         )
 
     # Load the parameters from the model for fine-tuning.
-    params = load_params_from_workdir(start_from_workdir)
+    params = checkpoint_utils.load_params_from_workdir(start_from_workdir)
 
     # Get data filepath.
     data_filepath = data_path_from_config(config=config)
@@ -758,50 +572,12 @@ def run_fine_tuning(
         config=config
     )
 
-    # tf_record_present = False
-    # if data_filepath.suffix == '.npz':
-    #     loader = data.NpzDataLoaderSparse(input_file=data_filepath)
-    # elif data_filepath.stem[:5].lower() == 'spice':
-    #     logging.mlff(f'Found SPICE dataset at {data_filepath}.')
-    #     if data_filepath.suffix != '.hdf5':
-    #         raise ValueError(
-    #             f'Loader assumes that SPICE is in hdf5 format. Found {data_filepath.suffix} as'
-    #             f'suffix.')
-    #     loader = data.SpiceDataLoaderSparse(input_file=data_filepath)
-    # elif data_filepath.is_dir():
-    #     tf_record_present = len([1 for x in os.scandir(data_filepath) if Path(x).suffix[:9] == '.tfrecord']) > 0
-    #     if tf_record_present:
-    #         loader = data.TFDSDataLoaderSparse(
-    #             input_file=data_filepath,
-    #             split='train',
-    #             max_force_filter=config.data.filter.max_force / energy_unit * length_unit
-    #         )
-    #     else:
-    #         raise ValueError(
-    #             f"Specifying a directory for `data_filepath` is only supported for directories that contain .tfrecord "
-    #             f"files. No .tfrecord files found at {data_filepath}."
-    #         )
-    # else:
-    #     loader = data.AseDataLoaderSparse(input_file=data_filepath)
-
     # Prepare training and validation data and load the data set statistics.
     training_data, validation_data, data_stats = prepare_training_and_validation_data(
         config=config,
         loader=loader,
         tf_record_present=tf_record_present
     )
-
-    # if config.data.shift_mode == 'mean':
-    #     config.data.energy_shifts = config_dict.placeholder(dict)
-    #     energy_mean = data.transformations.calculate_energy_mean(training_data) * energy_unit
-    #     num_nodes = data.transformations.calculate_average_number_of_nodes(training_data)
-    #     energy_shifts = {str(a): float(energy_mean / num_nodes) for a in range(119)}
-    #     config.data.energy_shifts = energy_shifts
-    # elif config.data.shift_mode == 'custom':
-    #     if config.data.energy_shifts is None:
-    #         raise ValueError('For config.data.shift_mode == custom config.data.energy_shifts must be given.')
-    # else:
-    #     config.data.energy_shifts = {str(a): 0. for a in range(119)}
 
     # Check that message normalization has not change from original model to fine-tuning model.
     hyperparams_path = start_from_workdir / 'hyperparameters.json'
@@ -839,10 +615,10 @@ def run_fine_tuning(
             trainable_subset_keys=trainable_subset_keys
         )
 
-    # TODO: One could load the model from the original workdir itself, but this would mean to either have a specific
-    #  fine_tuning_config or to silently ignore the model config in the config file. For now one has to make sure to
-    #  define a suited model from config such that for now responsibility lies at the user. And code breaks if it is
-    #  not done properly so is directly visible by user.
+    # One could load the model from the original workdir itself, but this would mean to either have a specific
+    # fine_tuning_config or to silently ignore the model config in the config file. For now one has to make sure to
+    # define a suited model from config such that for now responsibility lies at the user. And code breaks if it is
+    # not done properly so is directly visible by user.
     if model == 'so3krates':
         net = make_so3krates_sparse_from_config(config)
     elif model == 'itp_net':
@@ -876,39 +652,63 @@ def run_fine_tuning(
         config.training.batch_max_num_pairs = batch_max_num_pairs
 
     with open(workdir / 'hyperparameters.json', 'w') as fp:
-        # json_config = config.to_dict()
-        # energy_shifts = json_config['data']['energy_shifts']
-        # energy_shifts = jax.tree_map(lambda x: x.item(), energy_shifts)
         json.dump(config.to_dict(), fp)
 
     with open(workdir / "hyperparameters.yaml", "w") as yaml_file:
         yaml.dump(config.to_dict(), yaml_file, default_flow_style=False)
 
-    wandb.init(config=config.to_dict(), **config.training.wandb_init_args)
+    # Initialize wandb if needed.
+    use_wandb = config.training.use_wandb
+    if use_wandb is True:
+        import wandb
+        wandb.init(config=config.to_dict(), **config.training.wandb_init_args)
 
     logging.mlff(
         f'Fine tuning model from {start_from_workdir} on {data_filepath}!'
     )
-    training_utils.fit(
-        model=net,
-        optimizer=opt,
-        loss_fn=loss_fn,
-        graph_to_batch_fn=jraph_utils.graph_to_batch_fn,
-        batch_max_num_edges=config.training.batch_max_num_edges,
-        batch_max_num_nodes=config.training.batch_max_num_nodes,
-        batch_max_num_graphs=config.training.batch_max_num_graphs,
-        batch_max_num_pairs=config.training.batch_max_num_pairs,
-        training_data=training_data,
-        validation_data=validation_data,
-        params=params,
-        ckpt_dir=workdir / 'checkpoints',
-        eval_every_num_steps=config.training.eval_every_num_steps,
-        allow_restart=config.training.allow_restart,
-        num_epochs=config.training.num_epochs,
-        training_seed=config.training.training_seed,
-        model_seed=config.training.model_seed,
-        log_gradient_values=config.training.log_gradient_values
-    )
+    if tf_record_present is True:
+        training_utils.fit_from_iterator(
+            model=net,
+            optimizer=opt,
+            loss_fn=loss_fn,
+            graph_to_batch_fn=jraph_utils.graph_to_batch_fn,
+            batch_max_num_edges=config.training.batch_max_num_edges,
+            batch_max_num_nodes=config.training.batch_max_num_nodes,
+            batch_max_num_graphs=config.training.batch_max_num_graphs,
+            batch_max_num_pairs=config.training.batch_max_num_pairs,
+            training_iterator=training_data,
+            validation_iterator=validation_data,
+            params=params,
+            ckpt_dir=workdir / 'checkpoints',
+            eval_every_num_steps=config.training.eval_every_num_steps,
+            allow_restart=config.training.allow_restart,
+            training_seed=config.training.training_seed,
+            model_seed=config.training.model_seed,
+            log_gradient_values=config.training.log_gradient_values,
+            use_wandb=use_wandb
+        )
+    else:
+        training_utils.fit(
+            model=net,
+            optimizer=opt,
+            loss_fn=loss_fn,
+            graph_to_batch_fn=jraph_utils.graph_to_batch_fn,
+            batch_max_num_edges=config.training.batch_max_num_edges,
+            batch_max_num_nodes=config.training.batch_max_num_nodes,
+            batch_max_num_graphs=config.training.batch_max_num_graphs,
+            batch_max_num_pairs=config.training.batch_max_num_pairs,
+            training_data=training_data,
+            validation_data=validation_data,
+            params=params,
+            ckpt_dir=workdir / 'checkpoints',
+            eval_every_num_steps=config.training.eval_every_num_steps,
+            allow_restart=config.training.allow_restart,
+            num_epochs=config.training.num_epochs,
+            training_seed=config.training.training_seed,
+            model_seed=config.training.model_seed,
+            log_gradient_values=config.training.log_gradient_values,
+            use_wandb=use_wandb
+        )
     logging.mlff('Training has finished!')
 
 
@@ -937,10 +737,11 @@ def data_loader_from_config(config):
         npz_record_present = len([1 for x in os.scandir(data_filepath) if Path(x).suffix == '.npz']) > 0
 
         if tf_record_present:
-            loader = data.TFDSDataLoaderSparse(
-                input_file=data_filepath,
+            max_force = config.data.filter.max_force
+            loader = data.QCMLDataLoaderSparse(
+                input_folder=data_filepath,
                 split='train',
-                max_force_filter=config.data.filter.max_force / energy_unit * length_unit
+                max_force_filter=max_force / energy_unit * length_unit if max_force is not None else None
             )
         elif npz_record_present:
             loader = data.NpzDataLoaderSparse(
@@ -960,8 +761,11 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
 
     workdir = workdir_from_config(config=config)
     data_filepath = data_path_from_config(config=config)
+
+    # Extract the units from config.
     energy_unit = energy_unit_from_config(config=config)
     length_unit = length_unit_from_config(config=config)
+    dipole_vec_unit = dipole_vec_unit_from_config(config=config)
 
     # Get the total number of data points.
     num_data = loader.cardinality()
@@ -969,8 +773,10 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
     num_valid = config.training.num_valid
 
     if num_train + num_valid > num_data:
-        raise ValueError(f"num_train + num_valid = {num_train + num_valid} exceeds the number of data points {num_data}"
-                         f" in {data_filepath}.")
+        raise ValueError(
+            f"num_train + num_valid = {num_train + num_valid} exceeds the number of data points {num_data}"
+            f" in {data_filepath}."
+        )
     if not tf_record_present:
         split_seed = config.data.split_seed
         numpy_rng = np.random.RandomState(split_seed)
@@ -1024,6 +830,8 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
     else:
         training_data, validation_data = loader.load(
             cutoff=config.model.cutoff / length_unit,
+            calculate_neighbors_lr=config.data.neighbors_lr_bool,
+            cutoff_lr=config.data.neighbors_lr_cutoff / length_unit if config.data.neighbors_lr_bool is True else None,
             num_train=num_train,
             num_valid=num_valid
         )
@@ -1058,7 +866,8 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
             data.transformations.unit_conversion(
                 training_data,
                 energy_unit=energy_unit,
-                length_unit=length_unit
+                length_unit=length_unit,
+                dipole_vec_unit=dipole_vec_unit
             ),
             atomic_energy_shifts={int(k): v for (k, v) in config.data.energy_shifts.items()}
         ))
@@ -1067,7 +876,8 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
             data.transformations.unit_conversion(
                 validation_data,
                 energy_unit=energy_unit,
-                length_unit=length_unit
+                length_unit=length_unit,
+                dipole_vec_unit=dipole_vec_unit
             ),
             atomic_energy_shifts={int(k): v for (k, v) in config.data.energy_shifts.items()}
         ))
@@ -1082,14 +892,16 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
             lambda graph: data.transformations.unit_conversion_graph(
                 graph,
                 energy_unit=energy_unit,
-                length_unit=length_unit
+                length_unit=length_unit,
+                dipole_vec_unit=dipole_vec_unit
             )
         )
         validation_data = validation_data.map(
             lambda graph: data.transformations.unit_conversion_graph(
                 graph,
                 energy_unit=energy_unit,
-                length_unit=length_unit
+                length_unit=length_unit,
+                dipole_vec_unit=dipole_vec_unit
             )
         )
 
@@ -1100,55 +912,6 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
         ).repeat(config.training.num_epochs)
 
     return training_data, validation_data, data_stats
-
-
-def load_params_from_workdir(workdir):
-    """Load parameters from workdir.
-
-    Args:
-        workdir (str): Path to `workdir`.
-
-    Returns:
-        PyTree of parameters.
-
-    Raises:
-        ValueError: Workdir does not have a checkpoint directory.
-        RuntimeError: Loaded parameters are None.
-
-    """
-    load_path = Path(workdir).expanduser().resolve() / "checkpoints"
-    if not load_path.exists():
-        raise ValueError(
-            f'Trying to load parameters from {load_path} but path does not exist.'
-        )
-
-    loaded_mngr = checkpoint.CheckpointManager(
-        load_path,
-        item_names=('params',),
-        item_handlers={'params': checkpoint.StandardCheckpointHandler()},
-        options=checkpoint.CheckpointManagerOptions(step_prefix="ckpt"),
-    )
-
-    # loaded_mngr = checkpoint.CheckpointManager(
-    #     load_path,
-    #     {
-    #         "params": checkpoint.PyTreeCheckpointer(),
-    #     },
-    #     options=checkpoint.CheckpointManagerOptions(step_prefix="ckpt"),
-    # )
-    mgr_state = loaded_mngr.restore(
-        loaded_mngr.latest_step(),
-    )
-    params = mgr_state.get("params")
-
-    if params is None:
-        raise RuntimeError(
-            f'Parameters loaded from {load_path} are None.'
-        )
-
-    del loaded_mngr
-
-    return params
 
 
 def workdir_from_config(config):
@@ -1163,6 +926,23 @@ def data_path_from_config(config):
     return data_path
 
 
+def dipole_vec_unit_from_config(config):
+    dipole_vec_unit = config.data.dipole_vec_unit
+
+    # We need to define elementary charge, as it is not defined in ase.units.
+    e = 1.
+
+    return eval(dipole_vec_unit)
+
+
+def charge_unit_from_config(config):
+    electric_charge_unit = config.data.electric_charge_unit
+
+    # We need to define elementary charge, as it is not defined in ase.units.
+    e = 1.
+
+    return eval(electric_charge_unit)
+
 def energy_unit_from_config(config):
     energy_unit = eval(config.data.energy_unit)
     return energy_unit
@@ -1171,3 +951,14 @@ def energy_unit_from_config(config):
 def length_unit_from_config(config):
     length_unit = eval(config.data.length_unit)
     return length_unit
+
+def check_config(config):
+    neighbors_lr_cutoff = config.data.neighbors_lr_cutoff
+    neighbors_lr_bool = config.data.neighbors_lr_bool
+
+    if neighbors_lr_bool is True:
+        if neighbors_lr_cutoff is None:
+            raise ValueError(
+                f'If long-range neighbors are calculated, long-range cutoff must be specified in config. '
+                f'Received {neighbors_lr_bool=} and {neighbors_lr_cutoff=} from config.'
+            )

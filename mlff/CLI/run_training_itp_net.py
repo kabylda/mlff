@@ -8,7 +8,7 @@ import yaml
 
 def train_itp_net():
     # Create the parser
-    parser = argparse.ArgumentParser(description='Train a SO3kratesSparse model.')
+    parser = argparse.ArgumentParser(description='Train an ITP model.')
     parser.add_argument('--config', type=str, required=True, help='Path to the config file.')
 
     args = parser.parse_args()
@@ -21,6 +21,7 @@ def train_itp_net():
         with open(config, mode='r') as fp:
             cfg = config_dict.ConfigDict(yaml.load(fp, Loader=yaml.FullLoader))
 
+    from_config.check_config(cfg)
     from_config.run_training(cfg, model='itp_net')
 
 
