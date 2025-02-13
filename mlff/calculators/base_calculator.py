@@ -2,6 +2,7 @@
 import jax
 import jax.numpy as jnp
 
+from functools import partial
 from typing import Optional, Dict
 
 from ..utils import calculator_utils
@@ -132,3 +133,6 @@ def make_base_calculator(
             return output
 
     return base_calculator_fn
+
+
+make_so3krates_calculator = partial(make_base_calculator, model='so3krates')

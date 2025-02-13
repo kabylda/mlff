@@ -95,6 +95,9 @@ def evaluate_so3krates_sparse_on():
         x = json.load(fp)
     cfg = config_dict.ConfigDict(x)
 
+    # Overwrite the workdir to have an absolute path.
+    cfg.workdir = str(workdir)
+
     # Overwrite the data information in config dict.
     cfg.data.filepath = args.filepath
     cfg.data.length_unit = args.length_unit

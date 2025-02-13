@@ -223,10 +223,11 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
 
     if config.training.batch_max_num_nodes is None:
         assert config.training.batch_max_num_edges is None
+        assert config.training.batch_max_num_pairs is None
 
         if tf_record_present:
             raise ValueError(
-                'When reading TFDSDataSet, max_num_nodes and max_num_edges can not be auto-'
+                'When reading TFDSDataSet, `max_num_nodes`, `max_num_edges` and `max_num_pairs` can not be auto- '
                 'determined. Please set the corresponding values in the config file via '
                 'training.batch_max_num_nodes and training.batch_max_num_edges.'
             )
@@ -242,7 +243,16 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
             # TODO: This always creates num_pairs to be quadratic in the number of nodes. Add data_stats about max
             #  num_pairs which is important for the case of lr_cutoff smaller than largest separation in the data
             #  as this allows to safe cost.
-            batch_max_num_pairs = config.training.batch_max_num_nodes * (config.training.batch_max_num_nodes - 1) * (config.training.batch_max_num_graphs - 1) + 1
+
+            if tf_record_present:
+                raise ValueError(
+                    'When reading TFDSDataSet, `max_num_pairs` can not be auto- '
+                    'determined. Please set the corresponding values in the config file via '
+                    'training.batch_max_num_nodes and training.batch_max_num_edges.'
+                )
+
+            batch_max_num_pairs = data_stats['max_num_of_nodes'] * (data_stats['max_num_of_nodes'] - 1) * (config.training.batch_max_num_graphs - 1) + 1
+            # batch_max_num_pairs = config.training.batch_max_num_nodes * (config.training.batch_max_num_nodes - 1) + 1
         else:
             batch_max_num_pairs = 0
 
@@ -400,6 +410,37 @@ def run_evaluation(
             numpy_rng = np.random.RandomState(0)
             numpy_rng.shuffle(eval_data)
 
+    if config.training.batch_max_num_nodes is None:
+        assert config.training.batch_max_num_edges is None
+
+        if tf_record_present:
+            raise ValueError(
+                'When reading TFDSDataSet, `max_num_nodes`, `max_num_edges` and `max_num_pairs` can not be auto- '
+                'determined. Please set the corresponding values in the config file via '
+                'training.batch_max_num_nodes and training.batch_max_num_edges.'
+            )
+
+        batch_max_num_nodes = data_stats['max_num_of_nodes'] * (config.training.batch_max_num_graphs - 1) + 1
+        batch_max_num_edges = data_stats['max_num_of_edges'] * (config.training.batch_max_num_graphs - 1) + 1
+
+        config.training.batch_max_num_nodes = batch_max_num_nodes
+        config.training.batch_max_num_edges = batch_max_num_edges
+
+    if config.training.batch_max_num_pairs is None:
+        if config.data.neighbors_lr_bool is True:
+            if tf_record_present:
+                raise ValueError(
+                    'When reading TFDSDataSet, `max_num_pairs` can not be auto- '
+                    'determined. Please set the corresponding values in the config file via '
+                    'training.batch_max_num_nodes and training.batch_max_num_edges.'
+                )
+
+            batch_max_num_pairs = data_stats['max_num_of_nodes'] * (data_stats['max_num_of_nodes'] - 1) * (config.training.batch_max_num_graphs - 1) + 1
+        else:
+            batch_max_num_pairs = 0
+
+        config.training.batch_max_num_pairs = batch_max_num_pairs
+
     if not tf_record_present:
         testing_data = data.transformations.subtract_atomic_energy_shifts(
             data.transformations.unit_conversion(
@@ -410,15 +451,6 @@ def run_evaluation(
             ),
             atomic_energy_shifts={int(k): v for (k, v) in config.data.energy_shifts.items()}
         )
-
-        if config.training.batch_max_num_nodes is None:
-            assert config.training.batch_max_num_edges is None
-
-        batch_max_num_nodes = data_stats['max_num_of_nodes'] * (config.training.batch_max_num_graphs - 1) + 1
-        batch_max_num_edges = data_stats['max_num_of_edges'] * (config.training.batch_max_num_graphs - 1) + 1
-
-        config.training.batch_max_num_nodes = batch_max_num_nodes
-        config.training.batch_max_num_edges = batch_max_num_edges
     else:
         testing_data = eval_data.map(
             lambda graph: data.transformations.unit_conversion_graph(
@@ -433,26 +465,6 @@ def run_evaluation(
     ckpt_dir = ckpt_dir.expanduser().resolve()
     logging.mlff(f'Restore parameters from {ckpt_dir} ...')
 
-    # ckpt_mngr = checkpoint.CheckpointManager(
-    #     ckpt_dir,
-    #     item_names=('params',),
-    #     item_handlers={'params': checkpoint.StandardCheckpointHandler()},
-    #     options=checkpoint.CheckpointManagerOptions(step_prefix='ckpt')
-    # )
-    #
-    # # ckpt_mngr = checkpoint.CheckpointManager(
-    # #     ckpt_dir,
-    # #     {'params': checkpoint.PyTreeCheckpointer()},
-    # #     options=checkpoint.CheckpointManagerOptions(step_prefix='ckpt')
-    # # )
-    # latest_step = ckpt_mngr.latest_step()
-    # if latest_step is not None:
-    #     params = ckpt_mngr.restore(
-    #         latest_step,
-    #         items=None
-    #     )['params']
-    # else:
-    #     raise FileNotFoundError(f'No checkpoint found at {ckpt_dir}.')
     params = checkpoint_utils.load_params_from_checkpoint(ckpt_dir=ckpt_dir)
 
     logging.mlff(f'... done.')
@@ -635,21 +647,52 @@ def run_fine_tuning(
 
     if config.training.batch_max_num_nodes is None:
         assert config.training.batch_max_num_edges is None
+
         if tf_record_present:
             raise ValueError(
-                'When reading TFDSDataSet, max_num_nodes and max_num_edges can not be auto-'
+                'When reading TFDSDataSet, `max_num_nodes`, `max_num_edges` and `max_num_pairs` can not be auto- '
                 'determined. Please set the corresponding values in the config file via '
                 'training.batch_max_num_nodes and training.batch_max_num_edges.'
             )
 
         batch_max_num_nodes = data_stats['max_num_of_nodes'] * (config.training.batch_max_num_graphs - 1) + 1
         batch_max_num_edges = data_stats['max_num_of_edges'] * (config.training.batch_max_num_graphs - 1) + 1
-        # TODO: handle max_num_pairs as for run_training(...)
-        batch_max_num_pairs = data_stats['max_num_of_nodes'] * (data_stats['max_num_of_nodes'] - 1) * (config.training.batch_max_num_graphs - 1) + 1
 
         config.training.batch_max_num_nodes = batch_max_num_nodes
         config.training.batch_max_num_edges = batch_max_num_edges
+
+    if config.training.batch_max_num_pairs is None:
+        if config.data.neighbors_lr_bool is True:
+            if tf_record_present:
+                raise ValueError(
+                    'When reading TFDSDataSet, `max_num_pairs` can not be auto- '
+                    'determined. Please set the corresponding values in the config file via '
+                    'training.batch_max_num_nodes and training.batch_max_num_edges.'
+                )
+
+            batch_max_num_pairs = data_stats['max_num_of_nodes'] * (data_stats['max_num_of_nodes'] - 1) * (config.training.batch_max_num_graphs - 1) + 1
+        else:
+            batch_max_num_pairs = 0
+
         config.training.batch_max_num_pairs = batch_max_num_pairs
+
+    # if config.training.batch_max_num_nodes is None:
+    #     assert config.training.batch_max_num_edges is None
+    #     if tf_record_present:
+    #         raise ValueError(
+    #             'When reading TFDSDataSet, max_num_nodes and max_num_edges can not be auto-'
+    #             'determined. Please set the corresponding values in the config file via '
+    #             'training.batch_max_num_nodes and training.batch_max_num_edges.'
+    #         )
+    #
+    #     batch_max_num_nodes = data_stats['max_num_of_nodes'] * (config.training.batch_max_num_graphs - 1) + 1
+    #     batch_max_num_edges = data_stats['max_num_of_edges'] * (config.training.batch_max_num_graphs - 1) + 1
+    #     # TODO: handle max_num_pairs as for run_training(...)
+    #     batch_max_num_pairs = data_stats['max_num_of_nodes'] * (data_stats['max_num_of_nodes'] - 1) * (config.training.batch_max_num_graphs - 1) + 1
+    #
+    #     config.training.batch_max_num_nodes = batch_max_num_nodes
+    #     config.training.batch_max_num_edges = batch_max_num_edges
+    #     config.training.batch_max_num_pairs = batch_max_num_pairs
 
     with open(workdir / 'hyperparameters.json', 'w') as fp:
         json.dump(config.to_dict(), fp)

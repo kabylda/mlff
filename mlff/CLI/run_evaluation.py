@@ -31,6 +31,9 @@ def evaluate_so3krates_sparse():
 
     pick_idx = splits[args.on_split] if args.on_split != 'full' else None
 
+    # Overwrite the workdir to have an absolute path.
+    cfg.workdir = str(workdir)
+
     metrics = from_config.run_evaluation(
         config=cfg,
         num_test=args.num_test,

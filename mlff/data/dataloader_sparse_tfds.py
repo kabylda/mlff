@@ -104,8 +104,8 @@ def create_graph_tuple_tf(
             cutoff=cutoff_lr
         )
     else:
-        centers_lr = tf.constant([])
-        others_lr = tf.constant([])
+        centers_lr = tf.constant([], dtype=tf.int64)
+        others_lr = tf.constant([], dtype=tf.int64)
 
     num_edges_lr = tf.shape(centers_lr)[0]
     num_nodes = tf.shape(atomic_numbers)[0]
