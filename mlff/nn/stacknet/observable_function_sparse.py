@@ -44,6 +44,9 @@ def get_observable_fn_sparse(model: StackNetSparse, observable: str = None):
                 num_unpaired_electrons: jnp.ndarray = None,
                 idx_i_lr: jnp.ndarray = None,
                 idx_j_lr: jnp.ndarray = None,
+                k_grid: jnp.ndarray = None,
+                k_smearing: jnp.ndarray = None,
+                **kwargs
         ):
             if batch_segments is None:
                 assert graph_mask is None
@@ -69,6 +72,8 @@ def get_observable_fn_sparse(model: StackNetSparse, observable: str = None):
                 num_unpaired_electrons=num_unpaired_electrons,
                 idx_i_lr=idx_i_lr,
                 idx_j_lr=idx_j_lr,
+                k_grid = k_grid,
+                k_smearing = k_smearing
             )
             return model.apply(params, inputs)
     else:
@@ -88,7 +93,10 @@ def get_observable_fn_sparse(model: StackNetSparse, observable: str = None):
                 total_charge: jnp.ndarray = None,
                 num_unpaired_electrons: jnp.ndarray = None,
                 idx_i_lr: jnp.ndarray = None,
-                idx_j_lr: jnp.ndarray = None
+                idx_j_lr: jnp.ndarray = None,
+                k_grid: jnp.ndarray = None,
+                k_smearing: jnp.ndarray = None,
+                **kwargs
         ):
             if batch_segments is None:
                 assert graph_mask is None
@@ -114,6 +122,8 @@ def get_observable_fn_sparse(model: StackNetSparse, observable: str = None):
                 num_unpaired_electrons=num_unpaired_electrons,
                 idx_i_lr=idx_i_lr,
                 idx_j_lr=idx_j_lr,
+                k_grid = k_grid,
+                k_smearing = k_smearing
             )
             return dict(observable=model.apply(params, inputs)[observable])
 
@@ -137,6 +147,8 @@ def get_energy_and_force_fn_sparse(model: StackNetSparse):
                   num_unpaired_electrons: jnp.ndarray = None,
                   idx_i_lr: jnp.ndarray = None,
                   idx_j_lr: jnp.ndarray = None,
+                  k_grid: jnp.ndarray = None,
+                  k_smearing: jnp.ndarray = None
                   ):
         if batch_segments is None:
             assert graph_mask is None
@@ -161,6 +173,8 @@ def get_energy_and_force_fn_sparse(model: StackNetSparse):
                       num_unpaired_electrons=num_unpaired_electrons,
                       idx_i_lr=idx_i_lr,
                       idx_j_lr=idx_j_lr,
+                      k_grid = k_grid,
+                      k_smearing = k_smearing
                       )
 
         energy = model.apply(params, inputs)['energy']  # (num_graphs)
@@ -184,6 +198,8 @@ def get_energy_and_force_fn_sparse(model: StackNetSparse):
             num_unpaired_electrons: jnp.ndarray = None,
             idx_i_lr: jnp.ndarray = None,
             idx_j_lr: jnp.ndarray = None,
+            k_grid: jnp.ndarray = None,
+            k_smearing: jnp.ndarray = None,
             *args,
             **kwargs
     ):
@@ -205,7 +221,9 @@ def get_energy_and_force_fn_sparse(model: StackNetSparse):
                           total_charge,
                           num_unpaired_electrons,
                           idx_i_lr,
-                          idx_j_lr
+                          idx_j_lr,
+                          k_grid = k_grid,
+                          k_smearing = k_smearing
                           )
 
         if batch_segments is None:
@@ -230,7 +248,9 @@ def get_energy_and_force_fn_sparse(model: StackNetSparse):
                       total_charge=total_charge,
                       num_unpaired_electrons=num_unpaired_electrons,
                       idx_i_lr=idx_i_lr,
-                      idx_j_lr=idx_j_lr
+                      idx_j_lr=idx_j_lr,
+                      k_grid = k_grid,
+                      k_smearing = k_smearing
                       )
 
         _, number_of_atoms_in_molecule = jnp.unique(batch_segments, return_counts=True, size=len(graph_mask))

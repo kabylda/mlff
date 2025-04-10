@@ -138,8 +138,8 @@ class mlffCalculatorSparse(Calculator):
         if calculate_stress:
             def energy_fn(system, strain: jnp.ndarray, neighbors):
                 system = strain_system(system, strain)
-                graph = system_to_graph(system, neighbors, pme=False)
-
+                graph = system_to_graph(system, neighbors)
+                
                 out = potential(graph, has_aux=has_aux)
                 if isinstance(out, tuple):
                     atomic_energy = out[0]
