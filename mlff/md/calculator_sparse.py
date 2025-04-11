@@ -90,6 +90,7 @@ class mlffCalculatorSparse(Calculator):
             has_aux: bool = False,
             from_file: bool = False,
             output_intermediate_quantities: Optional[Sequence[str]] = None,
+            **kwargs
     ):
 
         mlff_potential = MLFFPotentialSparse.create_from_ckpt_dir(
@@ -99,6 +100,7 @@ class mlffCalculatorSparse(Calculator):
                 cutoff_lr=lr_cutoff,
                 dispersion_energy_cutoff_lr_damping=dispersion_energy_cutoff_lr_damping,
                 neighborlist_format_lr='sparse',  # ASECalculator has sparse format.
+                **kwargs
             ),
             dtype=dtype,
             model=model,
@@ -160,7 +162,7 @@ class mlffCalculatorSparse(Calculator):
                 )(
                     system,
                     strain,
-                    neighbors
+                    neighbors,
                 )
 
                 forces = - grads[0].R
@@ -178,7 +180,7 @@ class mlffCalculatorSparse(Calculator):
 
         else:
             def energy_fn(system, neighbors):
-                graph = system_to_graph(system, neighbors, pme=False)
+                graph = system_to_graph(system, neighbors)
                 out = potential(graph, has_aux=has_aux)
                 if isinstance(out, tuple):
                     if not has_aux:
@@ -199,7 +201,7 @@ class mlffCalculatorSparse(Calculator):
                     has_aux=has_aux
                 )(
                     system,
-                    neighbors
+                    neighbors,
                 )
                 forces = - grads.R
 

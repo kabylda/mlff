@@ -4,6 +4,7 @@ from mlff.nn.embed import GeometryEmbedSparse
 from mlff.nn.layer import SO3kratesLayerSparse
 from mlff.nn.observable import EnergySparse
 from mlff.nn.observable import ElectrostaticEnergySparse
+from mlff.nn.observable import ElectrostaticEnergyKspace
 from mlff.nn.observable import DispersionEnergySparse
 from mlff.nn.observable import ZBLRepulsionSparse
 from mlff.nn.observable import DipoleVecSparse
@@ -44,6 +45,7 @@ def init_so3krates_sparse(
         energy_learn_atomic_type_shifts: bool = False,
         electrostatic_energy_bool: bool = False,
         electrostatic_energy_scale: float = 1.0,
+        electrostatic_energy_kspace_do_ewald_bool: bool = False,
         dispersion_energy_bool: bool = False,
         dispersion_energy_cutoff_lr_damping: Optional[float] = None,
         dispersion_energy_scale: float = 1.0,
@@ -112,9 +114,17 @@ def init_so3krates_sparse(
         neighborlist_format=neighborlist_format_lr
     )
 
+    electrostatic_energy_kspace = ElectrostaticEnergyKspace(
+        prop_keys=None,
+        partial_charges=partial_charges,
+        do_ewald=electrostatic_energy_kspace_do_ewald_bool,
+        electrostatic_energy_scale=electrostatic_energy_scale
+    )
+
     electrostatic_energy = ElectrostaticEnergySparse(
         prop_keys=None,
         partial_charges=partial_charges,
+        electrostatic_energy_kspace = electrostatic_energy_kspace,
         cutoff_lr=cutoff_lr,
         electrostatic_energy_scale=electrostatic_energy_scale,
         neighborlist_format=neighborlist_format_lr

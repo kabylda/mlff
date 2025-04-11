@@ -494,134 +494,6 @@ def coulomb_erf(
         return pairwise * (jax.lax.erf(rij / _sigma) - jax.scipy.special.erf(rij / (_cutoff * jnp.sqrt(2.0))))
 
 
-def custom_coulomb(_sigma):
-    def lr_k2(smearing, k2):
-        return 4 * jnp.pi * jnp.exp(-0.5 * smearing**2 * k2) / k2
-
-    def lr_r(smearing, r):
-        return jax.scipy.special.erf(r / (smearing * jnp.sqrt(2.0))) / r
-
-    def sr_r(smearing, r):
-        return jax.lax.erf(r / _sigma) * ( 1.0/ r - lr_r(smearing, r) )
-
-    def correction_background(smearing):
-        return jnp.pi * smearing**2
-
-    def correction_self(smearing):
-        return jnp.sqrt(2.0 / jnp.pi) / smearing
-
-    return jaxpme.potentials.RawPotential(sr_r, lr_r, lr_k2, correction_background, correction_self)
-
-def PME(
-    exponent=1,
-    exclusion_radius=None,
-    prefactor=1.0,
-    interpolation_nodes=4,
-    custom_potential=None,
-    full_neighbor_list=False,
-):
-    pot = jaxpme.potentials.potential(
-        exponent=exponent,
-        exclusion_radius=exclusion_radius,
-        custom_potential=custom_potential,
-    )
-    solver = jaxpme.solvers.pme(
-        pot, interpolation_nodes=interpolation_nodes, full_neighbor_list=full_neighbor_list
-    )
-
-    def potentials_fn(
-        charges,
-        cell,
-        positions,
-        i,
-        j,
-        rij,
-        k_grid,
-        smearing,
-        atom_mask=None,
-    ):
-        reciprocal_cell = jaxpme.kspace.get_reciprocal(cell)
-
-        volume = jnp.abs(jnp.linalg.det(cell))
-        kvectors = jaxpme.kspace.generate_kvectors(
-            reciprocal_cell,
-            k_grid.shape,
-            dtype=positions.dtype,
-            for_ewald=True,
-        )
-
-        if atom_mask is not None:
-            charges *= atom_mask
-
-        rspace = solver.rspace(smearing, charges, rij, i, j)
-        kspace = solver.kspace(
-            smearing, charges, reciprocal_cell, k_grid, kvectors, positions, volume
-        )
-
-        #potentials = rspace + kspace
-        potentials = rspace
-        #potentials = kspace
-
-        if atom_mask is not None:
-            potentials *= atom_mask
-
-        return prefactor * potentials
-
-    def atomic_energies(charges, cell, positions, *args, **kwargs):
-        potentials = potentials_fn(charges, cell, positions, *args, **kwargs)
-
-        if "atom_mask" in kwargs and kwargs["atom_mask"] is not None:
-            energies = jnp.where(kwargs["atom_mask"], charges * potentials, 0.0)
-        else:
-            energies = charges * potentials
-        return energies
-
-    def prepare_fn(atoms, charges, cutoff, mesh_spacing, smearing):
-        raise NotImplementedError("prepare_fn not implemented for custom PME function")
-
-    return jaxpme.calculators.Calculator(prepare_fn, potentials_fn, atomic_energies, None, None)
-
-
-@partial(jax.jit, static_argnames=('neighborlist_format',))
-def coulomb_pme_erf(
-        q: jnp.ndarray,
-        rij: jnp.ndarray,
-        idx_i: jnp.ndarray,
-        idx_j: jnp.ndarray,
-        positions: jnp.ndarray,
-        cell: jnp.ndarray,
-        k_grid: jnp.ndarray,
-        k_smearing: float,
-        ke: float,
-        sigma: float,
-        neighborlist_format: str = 'sparse'
-) -> jnp.ndarray:
-    """ PME Coulomb interaction with erf damping """
-    input_dtype = rij.dtype
-    print("DOING PME")
-
-    if neighborlist_format == 'sparse':
-        full_neighbor_list = True
-    elif neighborlist_format == 'ordered_sparse':
-        full_neighbor_list = False
-    else:
-        raise ValueError(
-            f"neighborlist_format must be one of either 'ordered_sparse' or 'sparse'. "
-            f"received {neighborlist_format=}"
-        )
-
-    # Cast constants to input dtype
-    _ke = jnp.asarray(ke, dtype=input_dtype)
-    _sigma = jnp.asarray(sigma, dtype=input_dtype)
-    #_k_smearing = jnp.asarray(k_smearing, dtype=input_dtype)
-    _k_smearing = k_smearing
-
-    calc = PME(prefactor=_ke,full_neighbor_list=full_neighbor_list,custom_potential=custom_coulomb(_sigma))
-
-    # Compute potential and compare against target value using default hypers
-    energies = calc.energy(q, cell, positions, idx_i, idx_j, rij, k_grid, _k_smearing)
-
-    return energies
 
 @partial(jax.jit, static_argnames=('neighborlist_format',))
 def coulomb_erf_shifted_force_smooth(
@@ -745,6 +617,7 @@ class ZBLRepulsionSparse(BaseSubModule):
 class ElectrostaticEnergySparse(BaseSubModule):
     prop_keys: Dict
     partial_charges: Any
+    electrostatic_energy_kspace: Any
     cutoff_lr: float
     ke: float = 14.399645351950548
     electrostatic_energy_scale: float = 1.0
@@ -767,7 +640,7 @@ class ElectrostaticEnergySparse(BaseSubModule):
 
         # If cutoff is set, we apply damping with error function with smoothing to zero at cutoff_lr.
         # We also apply force shifting to reduce discontinuity artifacts.
-        if self.cutoff_lr is not None and k_smearing is None and False:
+        if self.cutoff_lr is not None and k_smearing is None:
                 # Calculate electrostatic energies per long-range edge
                 atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth(
                     partial_charges,
@@ -814,14 +687,22 @@ class ElectrostaticEnergySparse(BaseSubModule):
         pass
 
 class ElectrostaticEnergyKspace(BaseSubModule):
-    from jaxpme.potentials import potential as get_potential
-    from jaxpme.solvers import ewald, pme
-    
-    solver: pme(get_potential())
+
+    prop_keys: Dict
     partial_charges: Any
+    do_ewald: bool = False
     ke: float = 14.399645351950548
     electrostatic_energy_scale: float = 1.0
     module_name: str = "electrostatic_energy_kspace"
+
+    def setup(self):
+        from jaxpme.solvers import ewald, pme
+        from jaxpme.potentials import potential as get_potential
+
+        if self.do_ewald:
+            self.solver = ewald(get_potential())
+        else:
+            self.solver = pme(get_potential())
     
     @nn.compact
     def __call__(self, inputs: Dict, *args, **kwargs) -> Dict[str, jnp.ndarray]:
@@ -837,22 +718,28 @@ class ElectrostaticEnergyKspace(BaseSubModule):
         reciprocal_cell = get_reciprocal(cell)
         volume = jnp.abs(jnp.linalg.det(cell))
         kvectors = generate_kvectors(
-            reciprocal_cell, k_grid.shape, dtype=positions.dtype, for_ewald=True
+            reciprocal_cell, k_grid.shape, dtype=positions.dtype, for_ewald=self.do_ewald
         )
+        print(kvectors.shape)
 
         if node_mask is not None:
             charges *= node_mask
 
-        potentials = self.solver.kspace(k_smearing, charges, reciprocal_cell, k_grid, kvectors, positions, volume)
+        if self.do_ewald:
+            potentials = self.solver.kspace(k_smearing, charges, kvectors, positions, volume)
+        else:
+            potentials = self.solver.kspace(k_smearing, charges, reciprocal_cell, k_grid, kvectors, positions, volume)
 
         if node_mask is not None:
-            potentials *= node_mask        
+            potentials *= node_mask
 
-        energies = charges * potentials  # shape?
-        energies *= ke
+        energies = charges * potentials
+        energies *= self.ke
 
-        return dict(electrostatic_energy=energies)
+        return dict(electrostatic_energy_kspace=energies)
 
+    def reset_output_convention(self, output_convention):
+        pass
 
 class DispersionEnergySparse(nn.Module):
     prop_keys: Dict

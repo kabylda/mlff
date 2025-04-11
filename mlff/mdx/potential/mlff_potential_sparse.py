@@ -54,6 +54,8 @@ def load_model_from_workdir(
         cfg.model.cutoff_lr = cutoff_lr
         cfg.neighborlist_format_lr = neighborlist_format
 
+        cfg.electrostatic_energy_kspace_do_ewald_bool = long_range_kwargs.get('coulomb_do_ewald', False)
+
         if dispersion_energy_bool is True:
             dispersion_energy_cutoff_lr_damping = long_range_kwargs['dispersion_energy_cutoff_lr_damping']
             if cutoff_lr is not None:
@@ -225,6 +227,8 @@ class MLFFPotentialSparse(MachineLearningPotential):
                 'total_charge': graph.total_charge,
                 'num_unpaired_electrons': graph.num_unpaired_electrons,
                 'cell': getattr(graph, 'cell', None),
+                'k_grid': getattr(graph, 'k_grid', None),
+                'k_smearing': getattr(graph, 'k_smearing', None),
             }
             if long_range_bool is True:
                 x_lr = {
