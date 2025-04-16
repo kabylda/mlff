@@ -7,7 +7,7 @@ from ase.units import alpha as fine_structure
 from functools import partial
 from jax.ops import segment_sum
 from jax.nn.initializers import constant
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Callable, Dict, Tuple, Optional, Sequence
 from typing import Optional
 
 from mlff.nn.base.sub_module import BaseSubModule
@@ -26,11 +26,15 @@ class EnergySparse(BaseSubModule):
     learn_atomic_type_shifts: bool = False
     output_is_zero_at_init: bool = True
     output_convention: str = 'per_structure'
+    output_intermediate_quantities: Optional[Sequence[str]] = None
     module_name: str = 'energy'
     electrostatic_energy_bool: bool = False
     electrostatic_energy: Optional[Any] = None
     dispersion_energy_bool: bool = False
     dispersion_energy: Optional[Any] = None
+    partial_charges: Optional[Any] = None
+    hirshfeld_ratios: Optional[Any] = None
+    dipole_vec: Optional[Any] = None
     zbl_repulsion_bool: bool = False
     zbl_repulsion: Optional[Any] = None
 
@@ -62,6 +66,7 @@ class EnergySparse(BaseSubModule):
         batch_segments = inputs['batch_segments']  # (num_nodes)
         node_mask = inputs['node_mask']  # (num_nodes)
         graph_mask = inputs['graph_mask']  # (num_graphs)
+        #output_intermediate_quantities = inputs['output_intermediate_quantities']
 
         num_graphs = len(graph_mask)
         if self.learn_atomic_type_shifts:
@@ -130,17 +135,45 @@ class EnergySparse(BaseSubModule):
             )  # (num_graphs)
             energy = safe_scale(energy, graph_mask)
 
-            return dict(energy=energy)
+            #return dict(energy=energy)
+            if self.output_intermediate_quantities is not None:
+                return dict(energy=energy, **self.get_intermediate_quantities(inputs))
+            else:
+                return dict(energy=energy)
 
         elif self.output_convention == 'per_atom':
-            energy = atomic_energy  # (num_nodes)
+            energy = safe_scale(atomic_energy, node_mask)  # (num_nodes)
 
-            return dict(energy=energy)
+            if self.output_intermediate_quantities is not None:
+                return dict(energy=energy, **self.get_intermediate_quantities(inputs))
+            else:
+                return dict(energy=energy)
 
         else:
             raise ValueError(
                 f'{self.output_convention} is invalid argument for attribute `output_convention`.'
             )
+
+    def get_intermediate_quantities(self, inputs: Dict) -> Dict[str, Any]:
+        """
+        Returns the intermediate quantities used in the energy calculation.
+        """
+        intermediate_quantities = {}
+
+        if 'partial_charges' in self.output_intermediate_quantities:
+            intermediate_quantities.update(partial_charges=self.partial_charges(inputs))
+        if 'hirshfeld_ratios' in self.output_intermediate_quantities:
+            intermediate_quantities.update(hirshfeld_ratios=self.hirshfeld_ratios(inputs))
+        if 'dipole_vec' in self.output_intermediate_quantities:
+            intermediate_quantities.update(dipole_vec=self.dipole_vec(inputs))
+        if 'zbl_repulsion' in self.output_intermediate_quantities:
+            intermediate_quantities.update(zbl_repulsion=self.zbl_repulsion(inputs))
+        if 'electrostatic_energy' in self.output_intermediate_quantities:
+            intermediate_quantities.update(electrostatic_energy=self.electrostatic_energy(inputs))
+        if 'dispersion_energy' in self.output_intermediate_quantities:
+            intermediate_quantities.update(dispersion_energy=self.dispersion_energy(inputs))
+
+        return intermediate_quantities
 
     def reset_output_convention(self, output_convention):
         self.output_convention = output_convention

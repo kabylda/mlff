@@ -50,7 +50,8 @@ def init_so3krates_sparse(
         zbl_repulsion_bool: bool = False,
         return_representations_bool: bool = False,
         input_convention: str = 'positions',
-        neighborlist_format_lr: str = 'sparse'  # or 'ordered_sparse'
+        neighborlist_format_lr: str = 'sparse',  # or 'ordered_sparse'
+        output_intermediate_quantities: Optional[Sequence[str]] = None,
 ):
     embedding_modules = make_embedding_modules(
         num_features=num_features,
@@ -139,10 +140,14 @@ def init_so3krates_sparse(
         learn_atomic_type_shifts=energy_learn_atomic_type_shifts,
         electrostatic_energy=electrostatic_energy,
         dispersion_energy=dispersion_energy,
+        partial_charges=partial_charges,
+        hirshfeld_ratios=hirshfeld_ratios,
+        dipole_vec=dipole_vec,
         zbl_repulsion=zbl_repulsion,
         electrostatic_energy_bool=electrostatic_energy_bool,
         dispersion_energy_bool=dispersion_energy_bool,
-        zbl_repulsion_bool=zbl_repulsion_bool
+        zbl_repulsion_bool=zbl_repulsion_bool,
+        output_intermediate_quantities=output_intermediate_quantities,
     )
 
     return StackNetSparse(
