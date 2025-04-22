@@ -242,7 +242,7 @@ def test_batching(max_num_graphs: int):
         # First graph.
         g = next(batched_graphs)
         batched_input = batched_graph_to_input(g)
-        batched_input = jax.tree_map(jnp.array, batched_input)
+        batched_input = jax.tree_util.tree_map(jnp.array, batched_input)
         outQ = charge_embed.apply(params_Q, batched_input)
         outS = spin_embed.apply(params_S, batched_input)
 
@@ -252,7 +252,7 @@ def test_batching(max_num_graphs: int):
         # Second graph.
         g = next(batched_graphs)
         batched_input = batched_graph_to_input(g)
-        batched_input = jax.tree_map(jnp.array, batched_input)
+        batched_input = jax.tree_util.tree_map(jnp.array, batched_input)
         outQ = charge_embed.apply(params_Q, batched_input)
         outS = spin_embed.apply(params_S, batched_input)
 
@@ -262,7 +262,7 @@ def test_batching(max_num_graphs: int):
         # Third graph.
         g = next(batched_graphs)
         batched_input = batched_graph_to_input(g)
-        batched_input = jax.tree_map(jnp.array, batched_input)
+        batched_input = jax.tree_util.tree_map(jnp.array, batched_input)
         outQ = charge_embed.apply(params_Q, batched_input)
         outS = spin_embed.apply(params_S, batched_input)
 
@@ -276,7 +276,7 @@ def test_batching(max_num_graphs: int):
         # First graph batch.
         g = next(batched_graphs)
         batched_input = batched_graph_to_input(g)
-        batched_input = jax.tree_map(jnp.array, batched_input)
+        batched_input = jax.tree_util.tree_map(jnp.array, batched_input)
         outQ = charge_embed.apply(params_Q, batched_input)
         outS = spin_embed.apply(params_S, batched_input)
 
@@ -289,7 +289,7 @@ def test_batching(max_num_graphs: int):
         # Second graph batch.
         g = next(batched_graphs)
         batched_input = batched_graph_to_input(g)
-        batched_input = jax.tree_map(jnp.array, batched_input)
+        batched_input = jax.tree_util.tree_map(jnp.array, batched_input)
         outQ = charge_embed.apply(params_Q, batched_input)
         outS = spin_embed.apply(params_S, batched_input)
 
@@ -303,7 +303,7 @@ def test_batching(max_num_graphs: int):
         # First graph batch.
         g = next(batched_graphs)
         batched_input = batched_graph_to_input(g)
-        batched_input = jax.tree_map(jnp.array, batched_input)
+        batched_input = jax.tree_util.tree_map(jnp.array, batched_input)
         outQ = charge_embed.apply(params_Q, batched_input)
         outS = spin_embed.apply(params_S, batched_input)
 

@@ -131,7 +131,7 @@ class PotentialSparse(MachineLearningPotential):
 
             if has_aux:
 
-                aux = jax.tree_map(lambda u: u.astype(dtype), y)
+                aux = jax.tree_util.tree_map(lambda u: u.astype(dtype), y)
                 aux.pop('energy')
 
                 return (

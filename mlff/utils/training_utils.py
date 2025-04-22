@@ -211,7 +211,7 @@ def make_training_step_fn(
         )
 
         if log_gradient_values:
-            metrics['grad_norm'] = unfreeze(jax.tree_map(lambda x: jnp.linalg.norm(x.reshape(-1), axis=0), grads))
+            metrics['grad_norm'] = unfreeze(jax.tree_util.tree_map(lambda x: jnp.linalg.norm(x.reshape(-1), axis=0), grads))
 
         updates, opt_state = optimizer.update(
             grads,
@@ -372,7 +372,7 @@ def fit(
             processed_graphs += batch_training['num_of_non_padded_graphs']
             processed_nodes += batch_max_num_nodes - jraph.get_number_of_padding_with_graphs_nodes(graph_batch_training)
             # Training data is numpy arrays so we now transform them to jax.numpy arrays.
-            batch_training = jax.tree_map(jnp.array, batch_training)
+            batch_training = jax.tree_util.tree_map(jnp.array, batch_training)
 
             # If params are None (in the first step), initialize the parameters or load from existing checkpoint.
             if params is None:
@@ -429,7 +429,7 @@ def fit(
                 eval_collection: Any = None
                 for graph_batch_validation in iterator_validation:
                     batch_validation = graph_to_batch_fn(graph_batch_validation)
-                    batch_validation = jax.tree_map(jnp.array, batch_validation)
+                    batch_validation = jax.tree_util.tree_map(jnp.array, batch_validation)
 
                     eval_out = validation_step_fn(
                         params,
@@ -581,7 +581,7 @@ def fit_from_iterator(
         processed_graphs += batch_training['num_of_non_padded_graphs']
         processed_nodes += batch_max_num_nodes - jraph.get_number_of_padding_with_graphs_nodes(graph_batch_training)
         # Training data is numpy arrays so we now transform them to jax.numpy arrays.
-        batch_training = jax.tree_map(jnp.array, batch_training)
+        batch_training = jax.tree_util.tree_map(jnp.array, batch_training)
 
         # If params are None (in the first step), initialize the parameters or load from existing checkpoint.
         if params is None:
@@ -638,7 +638,7 @@ def fit_from_iterator(
             eval_collection: Any = None
             for graph_batch_validation in validation_iterator_batched:
                 batch_validation = graph_to_batch_fn(graph_batch_validation)
-                batch_validation = jax.tree_map(jnp.array, batch_validation)
+                batch_validation = jax.tree_util.tree_map(jnp.array, batch_validation)
 
                 eval_out = validation_step_fn(
                     params,
@@ -778,6 +778,6 @@ def zero_grads():
         return ()
 
     def update_fn(updates, state, params=None):
-        return jax.tree_map(jnp.zeros_like, updates), ()
+        return jax.tree_util.tree_map(jnp.zeros_like, updates), ()
 
     return optax.GradientTransformation(init_fn, update_fn)

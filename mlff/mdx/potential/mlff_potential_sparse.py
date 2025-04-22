@@ -233,7 +233,7 @@ class MLFFPotentialSparse(MachineLearningPotential):
             x = graph_to_mlff_input(graph)
             y = obs_fn(params, **x)
             if has_aux:
-                return shift_fn(y['energy'], x['atomic_numbers']).reshape(-1).astype(dtype), jax.tree_map(lambda u: u.astype(dtype), y)
+                return shift_fn(y['energy'], x['atomic_numbers']).reshape(-1).astype(dtype), jax.tree_util.tree_map(lambda u: u.astype(dtype), y)
             else:
                 return shift_fn(y['energy'], x['atomic_numbers']).reshape(-1).astype(dtype)
 

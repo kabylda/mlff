@@ -48,8 +48,8 @@ class DataSet:
             else:
                 return y
 
-        q_data = jax.tree_map(lambda y: reshape(y), q_data)
-        max_key = max(jax.tree_map(lambda y: len(y), q_data), key=jax.tree_map(lambda y: len(y), q_data).get)
+        q_data = jax.tree_util.tree_map(lambda y: reshape(y), q_data)
+        max_key = max(jax.tree_util.tree_map(lambda y: len(y), q_data), key=jax.tree_util.tree_map(lambda y: len(y), q_data).get)
         n_data = len(q_data[max_key])
 
         def repeat(name, y, repeats):
@@ -402,7 +402,7 @@ class DataSet:
         self.index_split(r_cut=r_cut, mic=mic, training=False, **subset_split)
 
     def save_splits_to_file(self, path, filename):
-        splits_ = jax.tree_map(lambda y: y.tolist(), self.splits)
+        splits_ = jax.tree_util.tree_map(lambda y: y.tolist(), self.splits)
         save_dict(path=path, filename=filename, data=splits_, exists_ok=True)
         print('Saved the data indices of the splits to {}'.format(os.path.join(path, filename)))
 
@@ -419,7 +419,7 @@ def tree_map_by_key(fn, x, keys):
     x_flat = flatten_dict(x)
     apply_mask = unflatten_dict({p: (p[-1] in keys) for p in x_flat})
     msk_fn = lambda y, m: fn(y) if m else y
-    return jax.tree_map(msk_fn, x, apply_mask)
+    return jax.tree_util.tree_map(msk_fn, x, apply_mask)
 
 
 def node_mask_required(z):

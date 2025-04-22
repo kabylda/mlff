@@ -261,7 +261,7 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
     with open(workdir / 'hyperparameters.json', 'w') as fp:
         # json_config = config.to_dict()
         # energy_shifts = json_config['data']['energy_shifts']
-        # energy_shifts = jax.tree_map(lambda x: x.item(), energy_shifts)
+        # energy_shifts = jax.tree_util.tree_map(lambda x: x.item(), energy_shifts)
         json.dump(config.to_dict(), fp)
 
     with open(workdir / "hyperparameters.yaml", "w") as yaml_file:

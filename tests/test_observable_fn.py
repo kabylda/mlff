@@ -237,7 +237,7 @@ def test_batching(max_num_graphs: int):
         # First graph.
         g = next(batched_graphs)
         batched_input = batched_graph_to_input(g)
-        batched_input = jax.tree_map(jnp.array, batched_input)
+        batched_input = jax.tree_util.tree_map(jnp.array, batched_input)
         out = energy_and_force_fn(params, **batched_input)
 
         npt.assert_allclose(out.get('energy')[1:], jnp.zeros((1,)))
@@ -253,7 +253,7 @@ def test_batching(max_num_graphs: int):
         # Second graph.
         g = next(batched_graphs)
         batched_input = batched_graph_to_input(g)
-        batched_input = jax.tree_map(jnp.array, batched_input)
+        batched_input = jax.tree_util.tree_map(jnp.array, batched_input)
         out = energy_and_force_fn(params, **batched_input)
 
         npt.assert_allclose(out.get('energy')[1:], jnp.zeros((1,)))
@@ -269,7 +269,7 @@ def test_batching(max_num_graphs: int):
         # Third graph.
         g = next(batched_graphs)
         batched_input = batched_graph_to_input(g)
-        batched_input = jax.tree_map(jnp.array, batched_input)
+        batched_input = jax.tree_util.tree_map(jnp.array, batched_input)
         out = energy_and_force_fn(params, **batched_input)
 
         npt.assert_allclose(out.get('energy')[1:], jnp.zeros((1,)))
@@ -288,7 +288,7 @@ def test_batching(max_num_graphs: int):
     if max_num_graphs == 3:
         g = next(batched_graphs)
         batched_input = batched_graph_to_input(g)
-        batched_input = jax.tree_map(jnp.array, batched_input)
+        batched_input = jax.tree_util.tree_map(jnp.array, batched_input)
         out = energy_and_force_fn(params, **batched_input)
 
         npt.assert_allclose(out.get('energy')[2:], jnp.zeros((1,)))
@@ -308,7 +308,7 @@ def test_batching(max_num_graphs: int):
         # Second graph batch.
         g = next(batched_graphs)
         batched_input = batched_graph_to_input(g)
-        batched_input = jax.tree_map(jnp.array, batched_input)
+        batched_input = jax.tree_util.tree_map(jnp.array, batched_input)
         out = energy_and_force_fn(params, **batched_input)
 
         npt.assert_allclose(out.get('energy')[1:], jnp.zeros((2,)))
@@ -327,7 +327,7 @@ def test_batching(max_num_graphs: int):
     if max_num_graphs == 4:
         g = next(batched_graphs)
         batched_input = batched_graph_to_input(g)
-        batched_input = jax.tree_map(jnp.array, batched_input)
+        batched_input = jax.tree_util.tree_map(jnp.array, batched_input)
         out = energy_and_force_fn(params, **batched_input)
 
         npt.assert_allclose(out.get('energy')[3:], jnp.zeros((1,)))

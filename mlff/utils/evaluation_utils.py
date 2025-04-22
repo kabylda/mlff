@@ -66,7 +66,7 @@ def evaluate(
     test_metrics: Any = None
     for graph_batch_testing in tqdm(iterator_testing):
         batch_testing = graph_to_batch_fn(graph_batch_testing)
-        batch_testing = jax.tree_map(jnp.array, batch_testing)
+        batch_testing = jax.tree_util.tree_map(jnp.array, batch_testing)
 
         node_mask = batch_testing['node_mask']
         graph_mask = batch_testing['graph_mask']
