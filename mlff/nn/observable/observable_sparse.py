@@ -34,7 +34,6 @@ class EnergySparse(BaseSubModule):
     dispersion_energy: Optional[Any] = None
     partial_charges: Optional[Any] = None
     hirshfeld_ratios: Optional[Any] = None
-    dipole_vec: Optional[Any] = None
     zbl_repulsion_bool: bool = False
     zbl_repulsion: Optional[Any] = None
 
@@ -116,16 +115,18 @@ class EnergySparse(BaseSubModule):
         atomic_energy = safe_scale(atomic_energy, node_mask)
 
         if self.zbl_repulsion_bool:
-            repulsion_energy = self.zbl_repulsion(inputs)['zbl_repulsion']
-            atomic_energy += repulsion_energy
+            inputs.update(**self.zbl_repulsion(inputs))
+            atomic_energy += inputs['zbl_repulsion']
 
         if self.electrostatic_energy_bool:
-            electrostatic_energy = self.electrostatic_energy(inputs)['electrostatic_energy']
-            atomic_energy += electrostatic_energy
+            inputs.update(**self.partial_charges(inputs))
+            inputs.update(**self.electrostatic_energy(inputs))
+            atomic_energy += inputs['electrostatic_energy']
 
         if self.dispersion_energy_bool:
-            dispersion_energy = self.dispersion_energy(inputs)['dispersion_energy']
-            atomic_energy += dispersion_energy
+            inputs.update(**self.hirshfeld_ratios(inputs))
+            inputs.update(**self.dispersion_energy(inputs))
+            atomic_energy += inputs['dispersion_energy']
 
         if self.output_convention == 'per_structure':
             energy = segment_sum(
@@ -160,18 +161,14 @@ class EnergySparse(BaseSubModule):
         """
         intermediate_quantities = {}
 
-        if 'partial_charges' in self.output_intermediate_quantities:
-            intermediate_quantities.update(partial_charges=self.partial_charges(inputs))
-        if 'hirshfeld_ratios' in self.output_intermediate_quantities:
-            intermediate_quantities.update(hirshfeld_ratios=self.hirshfeld_ratios(inputs))
-        if 'dipole_vec' in self.output_intermediate_quantities:
-            intermediate_quantities.update(dipole_vec=self.dipole_vec(inputs))
-        if 'zbl_repulsion' in self.output_intermediate_quantities:
-            intermediate_quantities.update(zbl_repulsion=self.zbl_repulsion(inputs))
-        if 'electrostatic_energy' in self.output_intermediate_quantities:
-            intermediate_quantities.update(electrostatic_energy=self.electrostatic_energy(inputs))
-        if 'dispersion_energy' in self.output_intermediate_quantities:
-            intermediate_quantities.update(dispersion_energy=self.dispersion_energy(inputs))
+        for imq_key in self.output_intermediate_quantities:
+            # Skip the intermediate quantities that are already defined as observables
+            if imq_key in ['dipole_vec', 'energy', 'hirshfeld_ratios']:
+                continue
+            imq = inputs.get(imq_key)
+            if imq is None:
+                raise ValueError(f"The requested intermediate quantity {imq_key} could not be generated.")
+            intermediate_quantities.update({imq_key:imq})
 
         return intermediate_quantities
 
@@ -629,7 +626,9 @@ class ElectrostaticEnergySparse(BaseSubModule):
         d_ij_lr = inputs['d_ij_lr']
 
         # Calculate partial charges
-        partial_charges = self.partial_charges(inputs)['partial_charges']
+        partial_charges = inputs.get('partial_charges')
+        if partial_charges is None:
+            partial_charges = self.partial_charges(inputs)['partial_charges']
 
         # If cutoff is set, we apply damping with error function with smoothing to zero at cutoff_lr.
         # We also apply force shifting to reduce discontinuity artifacts.
@@ -697,7 +696,9 @@ class DispersionEnergySparse(nn.Module):
         input_dtype = d_ij_lr.dtype
 
         # Calculate Hirshfeld ratios
-        hirshfeld_ratios = self.hirshfeld_ratios(inputs)['hirshfeld_ratios']
+        hirshfeld_ratios = inputs.get('hirshfeld_ratios')
+        if hirshfeld_ratios is None:
+            hirshfeld_ratios =  self.hirshfeld_ratios(inputs)['hirshfeld_ratios']
 
         # Get atomic numbers (needed to link to the free-atom reference values)
         atomic_numbers = inputs['atomic_numbers']  # (num_nodes)
