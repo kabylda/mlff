@@ -83,7 +83,7 @@ class StackNet(nn.Module):
             o_dict = o_fn(quantities)
             observables.update(o_dict)
 
-        # return jax.tree_map(lambda y: y[..., None], observables)
+        # return jax.tree_util.tree_map(lambda y: y[..., None], observables)
         return observables
 
     def __dict_repr__(self):
