@@ -48,7 +48,7 @@ class AseCalculatorSparse(Calculator):
             workdir: str,
             calculate_stress: bool = False,
             lr_cutoff: Optional[float] = 10.,
-            dispersion_energy_lr_cutoff_damping: Optional[float] = 2.,
+            dispersion_energy_cutoff_lr_damping: Optional[float] = 2.,
             capacity_multiplier: float = 1.25,
             buffer_size_multiplier: float = 1.25,
             use_cell_list: bool = False,
@@ -65,7 +65,7 @@ class AseCalculatorSparse(Calculator):
             add_shift=add_energy_shift,
             long_range_kwargs=dict(
                 cutoff_lr=lr_cutoff,
-                dispersion_energy_cutoff_lr_damping=dispersion_energy_lr_cutoff_damping,
+                dispersion_energy_cutoff_lr_damping=dispersion_energy_cutoff_lr_damping,
                 neighborlist_format_lr='sparse',  # ASECalculator has sparse format.
             ),
             dtype=dtype,
