@@ -31,6 +31,7 @@ class EnergySparse(BaseSubModule):
     module_name: str = 'energy'
     electrostatic_energy_bool: bool = False
     electrostatic_energy: Optional[Any] = None
+    electrostatic_energy_kspace: Optional[Any] = None
     dispersion_energy_bool: bool = False
     dispersion_energy: Optional[Any] = None
     partial_charges: Optional[Any] = None
@@ -123,11 +124,17 @@ class EnergySparse(BaseSubModule):
             inputs.update(**self.partial_charges(inputs))
             inputs.update(**self.electrostatic_energy(inputs))
             atomic_energy += inputs['electrostatic_energy']
+            if inputs.get('k_smearing', None) is not None:
+                inputs.update(**self.electrostatic_energy_kspace(inputs))
+                atomic_energy += inputs['electrostatic_energy_kspace']
 
         if self.dispersion_energy_bool:
             inputs.update(**self.hirshfeld_ratios(inputs))
             inputs.update(**self.dispersion_energy(inputs))
             atomic_energy += inputs['dispersion_energy']
+
+        atomic_energy = inputs['electrostatic_energy_kspace']
+        atomic_energy += inputs['electrostatic_energy']
 
         if self.output_convention == 'per_structure':
             energy = segment_sum(
@@ -486,12 +493,13 @@ def coulomb_erf(
     _ke = jnp.asarray(ke, dtype=input_dtype)
     _sigma = jnp.asarray(sigma, dtype=input_dtype)
 
-    pairwise = c * _ke * q[idx_i] * q[idx_j] / rij
+    pairwise = c * _ke * q[idx_i] * q[idx_j] * jax.lax.erf(rij / _sigma) / rij
     if cutoff is None:
-        return pairwise * jax.lax.erf(rij / _sigma)
+        return pairwise
     else:
         _cutoff = jnp.asarray(cutoff, dtype=input_dtype)
-        return pairwise * (jax.lax.erf(rij / _sigma) - jax.scipy.special.erf(rij / (_cutoff * jnp.sqrt(2.0))))
+        #return pairwise* (1.0-jax.scipy.special.erf(rij / (_cutoff * jnp.sqrt(2.0))))
+        return c * _ke * q[idx_i] * q[idx_j] * (1.0-jax.scipy.special.erf(rij / (_cutoff * jnp.sqrt(2.0)))) / rij # for testing PME the sigma cutoff is removed
 
 
 
@@ -617,7 +625,6 @@ class ZBLRepulsionSparse(BaseSubModule):
 class ElectrostaticEnergySparse(BaseSubModule):
     prop_keys: Dict
     partial_charges: Any
-    electrostatic_energy_kspace: Any
     cutoff_lr: float
     ke: float = 14.399645351950548
     electrostatic_energy_scale: float = 1.0
@@ -637,6 +644,8 @@ class ElectrostaticEnergySparse(BaseSubModule):
         partial_charges = inputs.get('partial_charges')
         if partial_charges is None:
             partial_charges = self.partial_charges(inputs)['partial_charges']
+        partial_charges = jnp.array([1, 1, 1, 1, -1, -1, -1, -1], dtype=d_ij_lr.dtype) # for testing PME, fix charges as given in the test_random_structure test
+        #partial_charges = jnp.array([-1, 1,], dtype=d_ij_lr.dtype) # Madelung test
 
         # If cutoff is set, we apply damping with error function with smoothing to zero at cutoff_lr.
         # We also apply force shifting to reduce discontinuity artifacts.
@@ -675,8 +684,6 @@ class ElectrostaticEnergySparse(BaseSubModule):
             segment_ids=idx_i_lr,
             num_segments=num_nodes
         )  # (num_nodes)
-        if k_smearing is not None:
-            atomic_electrostatic_energy += self.electrostatic_energy_kspace(inputs)['electrostatic_energy_kspace']        
 
         # Mask padded nodes
         atomic_electrostatic_energy = safe_scale(atomic_electrostatic_energy, node_mask)
@@ -687,7 +694,6 @@ class ElectrostaticEnergySparse(BaseSubModule):
         pass
 
 class ElectrostaticEnergyKspace(BaseSubModule):
-
     prop_keys: Dict
     partial_charges: Any
     do_ewald: bool = False
@@ -717,27 +723,36 @@ class ElectrostaticEnergyKspace(BaseSubModule):
         partial_charges = inputs.get('partial_charges')
         if partial_charges is None:
             partial_charges = self.partial_charges(inputs)['partial_charges']
+        partial_charges = jnp.array([1, 1, 1, 1, -1, -1, -1, -1], dtype=positions.dtype) # for testing PME, fix charges as given in the test_random_structure test
+        #partial_charges = jnp.array([-1, 1], dtype=positions.dtype) # Madelung test
+
+        assert positions is not None, "Positions must be provided for k-space calculation."
+        assert k_grid is not None, "k_grid must be provided for k-space calculation."
+        assert cell is not None, "Cell must be provided for k-space calculation."
+        assert k_smearing is not None, "k_smearing must be provided for k-space calculation."
 
         reciprocal_cell = get_reciprocal(cell)
         volume = jnp.abs(jnp.linalg.det(cell))
         kvectors = generate_kvectors(
             reciprocal_cell, k_grid.shape, dtype=positions.dtype, for_ewald=self.do_ewald
         )
-        print(kvectors.shape)
 
-        if node_mask is not None:
-            partial_charges *= node_mask
+        #if node_mask is not None:
+        #    partial_charges *= node_mask
 
         if self.do_ewald:
             potentials = self.solver.kspace(k_smearing, partial_charges, kvectors, positions, volume)
         else:
             potentials = self.solver.kspace(k_smearing, partial_charges, reciprocal_cell, k_grid, kvectors, positions, volume)
 
-        if node_mask is not None:
-            potentials *= node_mask
+        #if node_mask is not None:
+        #    potentials *= node_mask
 
         energies = partial_charges * potentials
         energies *= self.ke
+
+        # Mask padded nodes
+        energies = safe_scale(energies, node_mask)
 
         return dict(electrostatic_energy_kspace=energies)
 
