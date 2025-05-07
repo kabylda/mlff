@@ -31,6 +31,7 @@ class EnergySparse(BaseSubModule):
     module_name: str = 'energy'
     electrostatic_energy_bool: bool = False
     electrostatic_energy: Optional[Any] = None
+    electrostatic_energy_kspace: Optional[Any] = None
     dispersion_energy_bool: bool = False
     dispersion_energy: Optional[Any] = None
     partial_charges: Optional[Any] = None
@@ -123,6 +124,9 @@ class EnergySparse(BaseSubModule):
             inputs.update(**self.partial_charges(inputs))
             inputs.update(**self.electrostatic_energy(inputs))
             atomic_energy += inputs['electrostatic_energy']
+            if inputs.get('k_smearing', None) is not None:
+                inputs.update(**self.electrostatic_energy_kspace(inputs))
+                atomic_energy += inputs['electrostatic_energy_kspace']
 
         if self.dispersion_energy_bool:
             inputs.update(**self.hirshfeld_ratios(inputs))
@@ -617,7 +621,6 @@ class ZBLRepulsionSparse(BaseSubModule):
 class ElectrostaticEnergySparse(BaseSubModule):
     prop_keys: Dict
     partial_charges: Any
-    electrostatic_energy_kspace: Any
     cutoff_lr: float
     ke: float = 14.399645351950548
     electrostatic_energy_scale: float = 1.0
@@ -675,8 +678,6 @@ class ElectrostaticEnergySparse(BaseSubModule):
             segment_ids=idx_i_lr,
             num_segments=num_nodes
         )  # (num_nodes)
-        if k_smearing is not None:
-            atomic_electrostatic_energy += self.electrostatic_energy_kspace(inputs)['electrostatic_energy_kspace']        
 
         # Mask padded nodes
         atomic_electrostatic_energy = safe_scale(atomic_electrostatic_energy, node_mask)
@@ -687,7 +688,6 @@ class ElectrostaticEnergySparse(BaseSubModule):
         pass
 
 class ElectrostaticEnergyKspace(BaseSubModule):
-
     prop_keys: Dict
     partial_charges: Any
     do_ewald: bool = False
@@ -718,26 +718,33 @@ class ElectrostaticEnergyKspace(BaseSubModule):
         if partial_charges is None:
             partial_charges = self.partial_charges(inputs)['partial_charges']
 
+        assert positions is not None, "Positions must be provided for k-space calculation."
+        assert k_grid is not None, "k_grid must be provided for k-space calculation."
+        assert cell is not None, "Cell must be provided for k-space calculation."
+        assert k_smearing is not None, "k_smearing must be provided for k-space calculation."
+
         reciprocal_cell = get_reciprocal(cell)
         volume = jnp.abs(jnp.linalg.det(cell))
         kvectors = generate_kvectors(
             reciprocal_cell, k_grid.shape, dtype=positions.dtype, for_ewald=self.do_ewald
         )
-        print(kvectors.shape)
 
-        if node_mask is not None:
-            partial_charges *= node_mask
+        #if node_mask is not None:
+        #    partial_charges *= node_mask
 
         if self.do_ewald:
             potentials = self.solver.kspace(k_smearing, partial_charges, kvectors, positions, volume)
         else:
             potentials = self.solver.kspace(k_smearing, partial_charges, reciprocal_cell, k_grid, kvectors, positions, volume)
 
-        if node_mask is not None:
-            potentials *= node_mask
+        #if node_mask is not None:
+        #    potentials *= node_mask
 
         energies = partial_charges * potentials
         energies *= self.ke
+
+        # Mask padded nodes
+        energies = safe_scale(energies, node_mask)
 
         return dict(electrostatic_energy_kspace=energies)
 

@@ -124,7 +124,6 @@ def init_so3krates_sparse(
     electrostatic_energy = ElectrostaticEnergySparse(
         prop_keys=None,
         partial_charges=partial_charges,
-        electrostatic_energy_kspace = electrostatic_energy_kspace,
         cutoff_lr=cutoff_lr,
         electrostatic_energy_scale=electrostatic_energy_scale,
         neighborlist_format=neighborlist_format_lr
@@ -149,6 +148,7 @@ def init_so3krates_sparse(
         learn_atomic_type_scales=energy_learn_atomic_type_scales,
         learn_atomic_type_shifts=energy_learn_atomic_type_shifts,
         electrostatic_energy=electrostatic_energy,
+        electrostatic_energy_kspace=electrostatic_energy_kspace,
         dispersion_energy=dispersion_energy,
         partial_charges=partial_charges,
         hirshfeld_ratios=hirshfeld_ratios,
