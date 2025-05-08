@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import logging
-from typing import Any, Callable, Type, Dict
+from typing import Any, Callable, Type, Dict, Sequence, Optional
 from flax import struct
 from mlff.utils import Graph 
 from mlff.mdx.potential.machine_learning_potential import MachineLearningPotential
@@ -26,7 +26,8 @@ def load_model_from_workdir(
         workdir: str,
         model='so3krates',
         long_range_kwargs: Dict[str, Any] = None,
-        from_file: bool = False
+        from_file: bool = False,
+        output_intermediate_quantities: Optional[Sequence[[str]]]= None
 ):
     cfg = load_hyperparameters(workdir)
 
@@ -70,6 +71,8 @@ def load_model_from_workdir(
                         f"{dispersion_energy_cutoff_lr_damping=} and {cutoff_lr=}"
                     )
             cfg.model.dispersion_energy_cutoff_lr_damping = dispersion_energy_cutoff_lr_damping
+
+    cfg.output_intermediate_quantities = output_intermediate_quantities
 
     if from_file is True:
         import pickle
@@ -122,6 +125,7 @@ class MLFFPotentialSparse(MachineLearningPotential):
             long_range_kwargs: Dict[str, Any] = None,
             dtype=jnp.float32,
             model: str = 'so3krates',
+            output_intermediate_quantities: Optional[Sequence[[str]]] = None
     ):
         logging.warning(
             '`create_from_ckpt_dir` is deprecated and replaced by `create_from_workdir`, please use this method in '
@@ -134,6 +138,7 @@ class MLFFPotentialSparse(MachineLearningPotential):
             long_range_kwargs,
             dtype,
             model,
+            output_intermediate_quantities
         )
 
     @classmethod
@@ -145,6 +150,7 @@ class MLFFPotentialSparse(MachineLearningPotential):
             long_range_kwargs: Dict[str, Any] = None,
             dtype=jnp.float32,
             model: str = 'so3krates',
+            output_intermediate_quantities: Optional[Sequence[[str]]] = None
     ):
         """
 
@@ -174,7 +180,8 @@ class MLFFPotentialSparse(MachineLearningPotential):
             workdir=workdir,
             from_file=from_file,
             model=model,
-            long_range_kwargs=long_range_kwargs
+            long_range_kwargs=long_range_kwargs,
+            output_intermediate_quantities=output_intermediate_quantities
         )
 
         cfg = load_hyperparameters(workdir=workdir)

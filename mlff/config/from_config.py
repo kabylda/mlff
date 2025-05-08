@@ -74,6 +74,7 @@ def make_so3krates_sparse_from_config(
         return_representations_bool=return_representations_bool,
         zbl_repulsion_bool=model_config.zbl_repulsion_bool,
         neighborlist_format_lr=config.neighborlist_format_lr,
+        output_intermediate_quantities=config.output_intermediate_quantities,
     )
 
 
