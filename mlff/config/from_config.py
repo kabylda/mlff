@@ -94,6 +94,8 @@ def make_itp_net_from_config(config: config_dict.ConfigDict):
         radial_basis_fn=model_config.radial_basis_fn,
         num_radial_basis_fn=model_config.num_radial_basis_fn,
         cutoff_fn=model_config.cutoff_fn,
+        cutoff=model_config.cutoff,
+        cutoff_lr=model_config.cutoff_lr,
         filter_num_layers=model_config.filter_num_layers,
         filter_activation_fn=model_config.filter_activation_fn,
         mp_max_degree=model_config.mp_max_degree,
@@ -107,10 +109,10 @@ def make_itp_net_from_config(config: config_dict.ConfigDict):
         itp_connectivity=model_config.itp_connectivity,
         itp_growth_rate=model_config.itp_growth_rate,
         itp_dense_final_concatenation=model_config.itp_dense_final_concatenation,
-        feature_collection_over_layers=model_config.feature_collection_over_layers,
-        include_pseudotensors=model_config.include_pseudotensors,
         message_normalization=config.model.message_normalization,
         avg_num_neighbors=config.data.avg_num_neighbors if config.model.message_normalization == 'avg_num_neighbors' else None,
+        feature_collection_over_layers=model_config.feature_collection_over_layers,
+        include_pseudotensors=model_config.include_pseudotensors,
         output_is_zero_at_init=model_config.output_is_zero_at_init,
         input_convention=model_config.input_convention,
         use_charge_embed=model_config.use_charge_embed,
@@ -122,8 +124,10 @@ def make_itp_net_from_config(config: config_dict.ConfigDict):
         electrostatic_energy_bool=model_config.electrostatic_energy_bool,
         electrostatic_energy_scale=model_config.electrostatic_energy_scale,
         dispersion_energy_bool=model_config.dispersion_energy_bool,
+        dispersion_energy_cutoff_lr_damping=model_config.dispersion_energy_cutoff_lr_damping,
         dispersion_energy_scale=model_config.dispersion_energy_scale,
-        zbl_repulsion_bool=model_config.zbl_repulsion_bool
+        zbl_repulsion_bool=model_config.zbl_repulsion_bool,
+        neighborlist_format_lr=config.neighborlist_format_lr,
     )
 
 

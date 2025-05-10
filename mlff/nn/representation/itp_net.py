@@ -15,6 +15,7 @@ def init_itp_net(
         num_radial_basis_fn: int = 16,
         cutoff_fn: str = 'smooth_cutoff',
         cutoff: float = 5.,
+        cutoff_lr: Optional[float] = None,
         filter_num_layers: int = 1,
         filter_activation_fn: str = 'identity',
         mp_max_degree: int = 2,
@@ -43,8 +44,10 @@ def init_itp_net(
         electrostatic_energy_bool: bool = False,
         electrostatic_energy_scale: float = 1.0,
         dispersion_energy_bool: bool = False,
+        dispersion_energy_cutoff_lr_damping: Optional[float] = None,
         dispersion_energy_scale: float = 1.0,
         zbl_repulsion_bool: bool = False,
+        neighborlist_format_lr: str = 'sparse'  # or 'ordered_sparse'
 ):
     embedding_modules = make_embedding_modules(
         num_features=num_features,
@@ -102,34 +105,24 @@ def init_itp_net(
 
     dispersion_energy = DispersionEnergySparse(
         prop_keys=None,
-        output_is_zero_at_init=output_is_zero_at_init,
         hirshfeld_ratios=hirshfeld_ratios,
-        regression_dim=energy_regression_dim,
-        activation_fn=getattr(
-            nn.activation, energy_activation_fn
-        ) if energy_activation_fn != 'identity' else lambda u: u,
+        cutoff_lr=cutoff_lr,
+        cutoff_lr_damping=dispersion_energy_cutoff_lr_damping,
         dispersion_energy_scale=dispersion_energy_scale,
+        neighborlist_format=neighborlist_format_lr
     )
 
     electrostatic_energy = ElectrostaticEnergySparse(
         prop_keys=None,
-        output_is_zero_at_init=output_is_zero_at_init,
-        regression_dim=energy_regression_dim,
-        activation_fn=getattr(
-            nn.activation, energy_activation_fn
-        ) if energy_activation_fn != 'identity' else lambda u: u,
         partial_charges=partial_charges,
+        cutoff_lr=cutoff_lr,
         electrostatic_energy_scale=electrostatic_energy_scale,
+        neighborlist_format=neighborlist_format_lr
     )
 
     dipole_vec = DipoleVecSparse(
         prop_keys=None,
-        output_is_zero_at_init=output_is_zero_at_init,
-        regression_dim=energy_regression_dim,
-        activation_fn=getattr(
-            nn.activation, energy_activation_fn
-        ) if energy_activation_fn != 'identity' else lambda u: u,
-        partial_charges=partial_charges,
+        partial_charges=partial_charges
     )
     
     zbl_repulsion = ZBLRepulsionSparse(
