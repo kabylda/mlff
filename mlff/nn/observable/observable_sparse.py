@@ -33,6 +33,7 @@ class EnergySparse(BaseSubModule):
     dispersion_energy: Optional[Any] = None
     zbl_repulsion_bool: bool = False
     zbl_repulsion: Optional[Any] = None
+    use_final_bias_bool: bool = True
 
     def setup(self):
         if self.output_is_zero_at_init:
@@ -96,12 +97,14 @@ class EnergySparse(BaseSubModule):
             atomic_energy = nn.Dense(
                 1,
                 kernel_init=self.kernel_init,
+                use_bias=self.use_final_bias_bool,
                 name='energy_dense_final'
             )(y).squeeze(axis=-1)  # (num_nodes)
         else:
             atomic_energy = nn.Dense(
                 1,
                 kernel_init=self.kernel_init,
+                use_bias=self.use_final_bias_bool,
                 name='energy_dense_final'
             )(x).squeeze(axis=-1)  # (num_nodes)
 

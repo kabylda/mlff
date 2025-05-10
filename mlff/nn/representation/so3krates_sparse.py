@@ -48,6 +48,7 @@ def init_so3krates_sparse(
         dispersion_energy_cutoff_lr_damping: Optional[float] = None,
         dispersion_energy_scale: float = 1.0,
         zbl_repulsion_bool: bool = False,
+        use_final_bias_bool: bool = True,
         return_representations_bool: bool = False,
         input_convention: str = 'positions',
         neighborlist_format_lr: str = 'sparse'  # or 'ordered_sparse'
@@ -142,7 +143,8 @@ def init_so3krates_sparse(
         zbl_repulsion=zbl_repulsion,
         electrostatic_energy_bool=electrostatic_energy_bool,
         dispersion_energy_bool=dispersion_energy_bool,
-        zbl_repulsion_bool=zbl_repulsion_bool
+        zbl_repulsion_bool=zbl_repulsion_bool,
+        use_final_bias_bool=use_final_bias_bool
     )
 
     return StackNetSparse(
