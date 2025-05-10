@@ -164,7 +164,7 @@ def ASE_to_jraph(
 
     num_atoms = len(atomic_numbers)
 
-    if mol.get_calculator() is not None:
+    if mol.calc is not None:
         try:
             energy = np.array(mol.get_potential_energy()).reshape(-1)
         except PropertyNotImplementedError:
@@ -195,7 +195,7 @@ def ASE_to_jraph(
     # Energy is NaN when not present.
     if energy is None:
         # Energy from ASE is only a scalar.
-        energy = np.nan
+        energy = np.array([np.nan])
 
     # Dipoles are NaN when not present.
     if dipole is None:
