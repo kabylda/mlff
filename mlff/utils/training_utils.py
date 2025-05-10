@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, Sequence
 from ..utils import gradient_utils
 from ..utils import checkpoint_utils
 
-from robust_loss_jax import distribution as robust_loss_dist
+from .robust_loss_jax import distribution as robust_loss_dist
 # def interpolate1d(x, values, tangents):
 #   r"""Perform cubic hermite spline interpolation on a 1D spline.
 
@@ -279,9 +279,7 @@ from robust_loss_jax import distribution as robust_loss_dist
 #         less. Alpha can be any non-negative value, but the gradient of the NLL
 #         with respect to alpha has singularities at 0 and 2 so you may want to
 #         limit usage to (0, 2) during gradient descent. Must be a tensorflow
-#         tensor or numpy array of floats. Varying alpha in that range allows for
-#         smooth interpolation between a Cauchy distribution (alpha = 0) and a
-#         Normal distribution (alpha = 2) similar to a Student's T distribution.
+#         tensor or numpy array of floats.
 #       scale: The scale parameter of the loss. When |x| < scale, the NLL is like
 #         that of a (possibly unnormalized) normal distribution, and when |x| >
 #         scale the NLL takes on a different shape according to alpha. Must be a
