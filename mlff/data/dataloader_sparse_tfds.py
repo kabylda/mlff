@@ -5,6 +5,10 @@ import numpy as np
 from dataclasses import dataclass
 from functools import partial, partialmethod
 from typing import Optional
+import queue
+import wandb
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import Manager, get_context
 
 try:
     import tensorflow as tf
@@ -30,6 +34,16 @@ def compute_edges_tf(
     positions,
     cutoff: float
 ):
+    """Compute edges between atoms based on distance cutoff.
+    
+    Args:
+        positions: Atom positions tensor
+        cutoff: Distance cutoff for edge creation
+        
+    Returns:
+        centers: Indices of center atoms
+        others: Indices of neighbor atoms
+    """
     num_atoms = tf.shape(positions)[0]
     displacements = positions[None, :, :] - positions[:, None, :]
     distances = tf.norm(displacements, axis=-1)
@@ -60,7 +74,7 @@ def create_graph_tuple_tf(
     properties = element.keys()
 
     if 'energy' in properties:
-        globals_dict['energy'] = tf.reshape(element['formation_energy'], (1,))
+        globals_dict['energy'] = tf.reshape(element['energy'], (1,))
     if 'forces' in properties:
         nodes_dict['forces'] = element['forces']
     if 'hirshfeld_ratios' in properties:
@@ -125,116 +139,277 @@ def create_graph_tuple_tf(
         idx_j_lr=others_lr,
         n_pairs=tf.reshape(num_edges_lr, (1,))
     )
-
+    
 
 @dataclass
-class QCMLDataLoaderSparse:
+class WorkerConfig:
+    """Configuration for worker processes.
+    
+    Contains all parameters needed by worker processes to load and process data.
+    """
     input_folder: str
-    split: str = 'train'
-    max_force_filter: float = 1.e6
+    split: str
+    cutoff: float
+    batch_max_num_nodes: int
+    batch_max_num_edges: int
+    batch_max_num_graphs: int
+    batch_max_num_pairs: int
+    shuffle_seed: int
+    n_workers: int
+    worker_idx: int
+    max_force_filter: float
+    calculate_neighbors_lr: bool
+    cutoff_lr: float
+    train_seed: int
+    
+class StopToken:
+    """Token to signal that a worker has finished processing."""
+    pass
 
-    def cardinality(self):
-        builder = tfds.builder_from_directory(
-            self.input_folder
-        )
+class QCMLDataLoaderSparseParallel:
+    """Parallel data loader for the QCML dataset.
+    
+    Uses multiple processes to load and preprocess data in parallel.
+    """
+    STOP_TOKEN = StopToken()
 
-        # Metadata are available as usual
-        num_data = builder.info.splits[self.split].num_examples
-        del builder
+    def __init__(self, **kwargs):
+        """Initialize the data loader with configuration parameters."""
+        self.data_cfg = kwargs  # Store config in data_cfg attribute
 
-        return num_data
+        self.input_folder = self.data_cfg["input_folder"]
 
-    # TODO: Control everything via self.split, e.g. split = ['train[:50]', 'valid[:10]'] which can be constructed
-    #  using string formatting. Allows full control compatible with tf.data.Dataset API and num_train, num_valid are
-    #  not required anymore.
-    def load(
-            self,
-            cutoff: float,
-            num_train: int,
-            num_valid: int,
-            calculate_neighbors_lr: bool = False,
-            cutoff_lr: Optional[float] = None,
-            num_test: Optional[int] = None,
-            return_test: bool = False
-    ):
-        builder = tfds.builder_from_directory(
-            self.input_folder
-        )
+        # check dataset version
+        builder = tfds.builder_from_directory(self.input_folder)
+ 
+        self.cutoff = self.data_cfg["cutoff"]
+        self.batch_max_num_nodes = self.data_cfg["batch_max_num_nodes"]
+        self.batch_max_num_edges = self.data_cfg["batch_max_num_edges"]
+        self.batch_max_num_graphs = self.data_cfg["batch_max_num_graphs"]
+        self.batch_max_num_pairs = self.data_cfg["batch_max_num_pairs"]
+        self.max_force_filter = self.data_cfg["max_force_filter"]
+        self.calculate_neighbors_lr = self.data_cfg["calculate_neighbors_lr"]
+        self.cutoff_lr = self.data_cfg["cutoff_lr"]
+        self.train_seed = self.data_cfg["train_seed"]
 
-        test_string = f'{self.split}[{num_train}:{-num_valid}]' if num_test is None else f'{self.split}[{-(num_valid+num_test)}:{-num_valid}]'
+        if "n_proc" in self.data_cfg:
+            try:
+                self.n_proc = int(self.data_cfg["n_proc"][0])  # Access first element
+            except:
+                self.n_proc = int(self.data_cfg["n_proc"])  # Access first element
 
-        test_ds = None
-        if return_test:
-            # Split into train, valid and test.
-            train_ds, test_ds, valid_ds = builder.as_dataset(
-                split=[
-                    f'{self.split}[:{num_train}]',
-                    test_string,
-                    f'{self.split}[{-num_valid}:]'
-                ]
-            )
         else:
-            # Split into train and valid.
-            train_ds, valid_ds = builder.as_dataset(
-                split=[
-                    f'{self.split}[:{num_train}]',
-                    f'{self.split}[{-num_valid}:]'
-                ]
-            )
+            print("Warning: No number of processes specified. Defaulting to 8.")
+            self.n_proc = 8
 
-        # Filter single atoms.
-        train_ds = train_ds.filter(
-            lambda element: tf.math.greater(tf.shape(element['atomic_numbers'])[0], tf.constant(1))
-        )
-        valid_ds = valid_ds.filter(
-            lambda element: tf.math.greater(tf.shape(element['atomic_numbers'])[0], tf.constant(1))
-        )
-        if return_test:
-            test_ds = test_ds.filter(
-                lambda element: tf.math.greater(tf.shape(element['atomic_numbers'])[0], tf.constant(1))
-            )
+        # multithread stuff # important
+        ctx = get_context("spawn")
+        self.manager = ctx.Manager()
+        self.executor = ProcessPoolExecutor(max_workers=self.n_proc, mp_context=ctx)
 
-        # Create GraphTuples.
-        train_ds = train_ds.map(
+    @staticmethod
+    def _preprocess(dataset, 
+                    batch_max_num_nodes, 
+                    batch_max_num_edges, 
+                    batch_max_num_graphs, 
+                    batch_max_num_pairs,
+                    cutoff,
+                    calculate_neighbors_lr,
+                    cutoff_lr,
+                    max_force_filter,
+                    train_seed):
+        """Preprocess the dataset by creating graph tuples and batching.
+        
+        Args:
+            dataset: TensorFlow dataset to preprocess
+            batch_max_num_nodes: Maximum number of nodes in a batch
+            batch_max_num_edges: Maximum number of edges in a batch
+            batch_max_num_graphs: Maximum number of graphs in a batch
+            batch_max_num_pairs: Maximum number of pairs in a batch
+            cutoff: Distance cutoff for edge creation
+            calculate_neighbors_lr: Whether to calculate long-range neighbors
+            cutoff_lr: Distance cutoff for long-range neighbors
+            max_force_filter: Maximum force value for filtering
+            
+        Returns:
+            Batched dataset of graph tuples
+        """
+        dataset = dataset.map(
             lambda element: create_graph_tuple_tf(
                 element,
                 cutoff=cutoff,
                 calculate_neighbors_lr=calculate_neighbors_lr,
                 cutoff_lr=cutoff_lr
-            )
+            ), 
+            num_parallel_calls=tf.data.AUTOTUNE,
+        ).shuffle(
+            buffer_size=10_000,
+            reshuffle_each_iteration=True,
+            seed=train_seed 
+        ).prefetch(tf.data.AUTOTUNE
+        ).filter(
+            lambda graph: tf.math.less(tf.math.reduce_max(graph.nodes['forces']), tf.constant(max_force_filter))
         )
-        valid_ds = valid_ds.map(
-            lambda element: create_graph_tuple_tf(
-                element,
-                cutoff=cutoff,
-                calculate_neighbors_lr=calculate_neighbors_lr,
-                cutoff_lr=cutoff_lr
-            )
+        #TODO: need to add data.transformations.unit_conversion_graph before filtering 
+
+        batched_dataset = jraph.dynamically_batch(
+            dataset.as_numpy_iterator(),
+            n_node=batch_max_num_nodes,
+            n_edge=batch_max_num_edges,
+            n_graph=batch_max_num_graphs,
+            n_pairs=batch_max_num_pairs
         )
-        if return_test:
-            test_ds = test_ds.map(
-                lambda element: create_graph_tuple_tf(
-                    element,
-                    cutoff=cutoff,
-                    calculate_neighbors_lr=calculate_neighbors_lr,
-                    cutoff_lr=cutoff_lr
-                )
+
+        return batched_dataset
+
+    @staticmethod
+    def _safe_put(queue, item):
+        """Safely put an item in a queue, handling potential errors.
+        
+        Args:
+            queue: Queue to put the item into
+            item: Item to put in the queue
+        """
+        try:
+            queue.put(item)
+        except (EOFError, BrokenPipeError, ConnectionResetError) as e:
+            print(f"[!] Queue closed before item could be put: {e}")
+        except Exception as e:
+            print(f"[!] Unexpected error putting item to queue: {e}")
+
+    @staticmethod
+    def _worker(config, output_queue):
+        """Worker function that loads data for the given indices and puts it into the queue.
+        
+        Args:
+            config: WorkerConfig with all parameters
+            output_queue: Queue to put processed batches into
+        """
+        try:
+            # We need a deterministic shuffle seed, s.t. workers shuffle files in the same way
+            read_config = tfds.ReadConfig(
+                shuffle_seed=config.shuffle_seed,
             )
 
-        # Filter max forces.
-        train_ds = train_ds.filter(
-            lambda graph: tf.math.less(tf.math.reduce_max(graph.nodes['forces']), tf.constant(self.max_force_filter))
-        )
-        valid_ds = valid_ds.filter(
-            lambda graph: tf.math.less(tf.math.reduce_max(graph.nodes['forces']), tf.constant(self.max_force_filter))
-        )
-        if return_test:
-            test_ds = test_ds.filter(
-                lambda graph: tf.math.less(tf.math.reduce_max(graph.nodes['forces']),
-                                           tf.constant(self.max_force_filter))
-            )
+            # Note that tfds automatically pre-fetches after reading
+            # This might be suboptimal if we prefetch later and we can try to disable it
+            builder = tfds.builder_from_directory(config.input_folder)
+            dataset = builder.as_dataset(split=config.split, shuffle_files=True, read_config=read_config)
 
-        if return_test:
-            return train_ds, valid_ds, test_ds
-        else:
-            return train_ds, valid_ds
+            dataset = dataset.shard(num_shards=config.n_workers, index=config.worker_idx)
+
+            for batch in QCMLDataLoaderSparseParallel._preprocess(dataset,   
+                                                batch_max_num_nodes=config.batch_max_num_nodes,
+                                                batch_max_num_edges=config.batch_max_num_edges,
+                                                batch_max_num_graphs=config.batch_max_num_graphs,
+                                                batch_max_num_pairs=config.batch_max_num_pairs,
+                                                cutoff=config.cutoff,
+                                                calculate_neighbors_lr=config.calculate_neighbors_lr,
+                                                cutoff_lr=config.cutoff_lr,
+                                                max_force_filter=config.max_force_filter,
+                                                train_seed=config.train_seed
+                                                ):
+                output_queue.put(batch)
+        except Exception as e:
+            print(f"[!] Error in worker {config.worker_idx}: {e}")
+        finally:
+            # Finished processing data, always put a stop token
+            QCMLDataLoaderSparseParallel._safe_put(output_queue, QCMLDataLoaderSparseParallel.STOP_TOKEN)
+    
+    def _generator(self, split, mode):
+        """Generator reads data from the queue.
+        
+        Args:
+            split: Dataset split to use
+            
+        Yields:
+            Batches of data
+        """
+        shuffle_seed = np.random.randint(0, 2**31 - 1) # different shuffle seed for each epoch
+        output_queue = self.manager.Queue(maxsize=4) # cache maximum of 4 batches
+
+        for i in range(self.n_proc):
+            config = WorkerConfig(
+                input_folder=self.input_folder,
+                split=split,
+                cutoff=self.cutoff,
+                batch_max_num_nodes=self.batch_max_num_nodes,
+                batch_max_num_edges=self.batch_max_num_edges,
+                batch_max_num_graphs=self.batch_max_num_graphs,
+                batch_max_num_pairs=self.batch_max_num_pairs,
+                shuffle_seed=shuffle_seed,
+                n_workers=self.n_proc,
+                worker_idx=i,
+                max_force_filter=self.max_force_filter,
+                train_seed=self.train_seed,
+                calculate_neighbors_lr=self.calculate_neighbors_lr,
+                cutoff_lr=self.cutoff_lr
+            )
+            self.executor.submit(QCMLDataLoaderSparseParallel._worker, config, output_queue)
+    
+        n_stop_token = 0
+        ctr = 0
+        while True:
+            ctr += 1
+
+            try:
+                batch = output_queue.get(timeout=3)
+            except queue.Empty:
+                # Timeout expired, try again
+                continue
+            except Exception as e:
+                print(f"[!] Unexpected error retrieving item from queue: {e}")
+                break
+
+            if ctr % 100 == 0:
+                size = output_queue.qsize()
+                if wandb.run is not None:
+                    wandb.log({"queue_size_"+mode: size})
+
+            if isinstance(batch, StopToken):
+                n_stop_token += 1
+
+                # wait for all processes to finish
+                if n_stop_token == self.n_proc:
+                    break
+            else:
+                yield batch
+
+    def next_epoch(self, split, mode):
+        """Loads the data for ONE epoch.
+        
+        Args:
+            split: Dataset split to use
+            
+        Returns:
+            Generator yielding batches of data
+        """
+        if mode == 'train': # use multiporcessing for training batch 
+            return self._generator(split, mode)
+        else: #for now use single process for validation/test batch
+            return self._generator_sync(split)
+
+    def _generator_sync(self, split):
+        """Synchronous data generator for single-process operation.
+        
+        Args:
+            split: Dataset split to use
+            
+        Yields:
+            Batches of data
+        """
+        builder = tfds.builder_from_directory(self.input_folder)
+        dataset = builder.as_dataset(split=split, shuffle_files=True)
+
+        for batch in self._preprocess(dataset, 
+                                     batch_max_num_nodes=self.batch_max_num_nodes,
+                                     batch_max_num_edges=self.batch_max_num_edges,
+                                     batch_max_num_graphs=self.batch_max_num_graphs,
+                                     batch_max_num_pairs=self.batch_max_num_pairs,
+                                     cutoff=self.cutoff,
+                                     calculate_neighbors_lr=self.calculate_neighbors_lr,
+                                     cutoff_lr=self.cutoff_lr,
+                                     max_force_filter=self.max_force_filter,
+                                     train_seed=self.train_seed
+                                    ):
+            yield batch

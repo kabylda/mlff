@@ -223,6 +223,13 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
 
     loss_fn = training_utils.make_loss_fn(
         get_energy_and_force_fn_sparse(net),
+        weights=config.training.loss_weights,
+        use_robust_loss=config.training.get('use_robust_loss', False),
+        robust_loss_alpha=config.training.get('robust_loss_alpha', 1.99),
+    )
+
+    val_fn = training_utils.make_val_fn(
+        get_energy_and_force_fn_sparse(net),
         weights=config.training.loss_weights
     )
 
@@ -284,6 +291,7 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
             model=net,
             optimizer=opt,
             loss_fn=loss_fn,
+            val_fn=val_fn,
             graph_to_batch_fn=jraph_utils.graph_to_batch_fn,
             batch_max_num_edges=config.training.batch_max_num_edges,
             batch_max_num_nodes=config.training.batch_max_num_nodes,
@@ -305,6 +313,7 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
             model=net,
             optimizer=opt,
             loss_fn=loss_fn,
+            val_fn=val_fn,
             graph_to_batch_fn=jraph_utils.graph_to_batch_fn,
             batch_max_num_edges=config.training.batch_max_num_edges,
             batch_max_num_nodes=config.training.batch_max_num_nodes,
@@ -318,6 +327,9 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
             training_seed=config.training.training_seed,
             model_seed=config.training.model_seed,
             log_gradient_values=config.training.log_gradient_values,
+            num_epochs=config.training.num_epochs,
+            num_train=config.training.num_train,
+            num_valid=config.training.num_valid,
             use_wandb=use_wandb
         )
     logging.mlff('Training has finished!')
@@ -647,6 +659,13 @@ def run_fine_tuning(
 
     loss_fn = training_utils.make_loss_fn(
         get_energy_and_force_fn_sparse(net),
+        weights=config.training.loss_weights,
+        use_robust_loss=config.training.get('use_robust_loss', False),
+        robust_loss_alpha=config.training.get('robust_loss_alpha', 1.99),
+    )
+
+    val_fn = training_utils.make_val_fn(
+        get_energy_and_force_fn_sparse(net),
         weights=config.training.loss_weights
     )
 
@@ -719,6 +738,7 @@ def run_fine_tuning(
             model=net,
             optimizer=opt,
             loss_fn=loss_fn,
+            val_fn=val_fn,
             graph_to_batch_fn=jraph_utils.graph_to_batch_fn,
             batch_max_num_edges=config.training.batch_max_num_edges,
             batch_max_num_nodes=config.training.batch_max_num_nodes,
@@ -733,6 +753,9 @@ def run_fine_tuning(
             training_seed=config.training.training_seed,
             model_seed=config.training.model_seed,
             log_gradient_values=config.training.log_gradient_values,
+            num_epochs=config.training.num_epochs,
+            num_train=config.training.num_train,
+            num_valid=config.training.num_valid,
             use_wandb=use_wandb
         )
     else:
@@ -740,6 +763,7 @@ def run_fine_tuning(
             model=net,
             optimizer=opt,
             loss_fn=loss_fn,
+            val_fn=val_fn,
             graph_to_batch_fn=jraph_utils.graph_to_batch_fn,
             batch_max_num_edges=config.training.batch_max_num_edges,
             batch_max_num_nodes=config.training.batch_max_num_nodes,
@@ -786,7 +810,7 @@ def data_loader_from_config(config):
 
         if tf_record_present:
             max_force = config.data.filter.max_force
-            loader = data.QCMLDataLoaderSparse(
+            loader = data.QCMLDataLoaderSparseParallel(
                 input_folder=data_filepath,
                 split='train',
                 max_force_filter=max_force / energy_unit * length_unit if max_force is not None else None
@@ -816,7 +840,10 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
     dipole_vec_unit = dipole_vec_unit_from_config(config=config)
 
     # Get the total number of data points.
-    num_data = loader.cardinality()
+    if not tf_record_present:
+        num_data = loader.cardinality()
+    else:
+        num_data = num_train+num_valid+1 #TODO: calculate cardinality in the tfds loader
     num_train = config.training.num_train
     num_valid = config.training.num_valid
 
@@ -876,13 +903,54 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
             )
             json.dump(j, fp)
     else:
-        training_data, validation_data = loader.load(
-            cutoff=config.model.cutoff / length_unit,
-            calculate_neighbors_lr=config.data.neighbors_lr_bool,
-            cutoff_lr=config.data.neighbors_lr_cutoff / length_unit if config.data.neighbors_lr_bool is True else None,
-            num_train=num_train,
-            num_valid=num_valid
-        )
+        # For parallel data loading, we need to ensure batch parameters are set
+        if config.training.batch_max_num_nodes is None or config.training.batch_max_num_edges is None:
+            raise ValueError(
+                'When using QCMLDataLoaderSparseParallel, `batch_max_num_nodes` and `batch_max_num_edges` must be '
+                'specified in the config file via training.batch_max_num_nodes and training.batch_max_num_edges.'
+            )
+            
+        # Check batch_max_num_pairs if neighbors_lr_bool is True
+        if config.data.neighbors_lr_bool is True and config.training.batch_max_num_pairs is None:
+            raise ValueError(
+                'When using QCMLDataLoaderSparseParallel with neighbors_lr_bool=True, `batch_max_num_pairs` must be '
+                'specified in the config file via training.batch_max_num_pairs.'
+            )
+        
+        # Use QCMLDataLoaderSparseParallel for parallel data loading
+        # Initialize the parallel loader with required parameters
+        parallel_loader_config = {
+            "input_folder": data_filepath,
+            "cutoff": config.model.cutoff / length_unit,
+            "batch_max_num_nodes": config.training.batch_max_num_nodes,
+            "batch_max_num_edges": config.training.batch_max_num_edges,
+            "batch_max_num_graphs": config.training.batch_max_num_graphs,
+            "batch_max_num_pairs": config.training.batch_max_num_pairs if config.training.batch_max_num_pairs is not None else 0,
+            "max_force_filter": loader.max_force_filter if hasattr(loader, 'max_force_filter') else 1.e6,
+            "calculate_neighbors_lr": config.data.neighbors_lr_bool,
+            "cutoff_lr": config.data.neighbors_lr_cutoff / length_unit if config.data.neighbors_lr_bool is True else None,
+            "train_seed": config.training.training_seed 
+
+        }
+        
+        # Add number of processes if specified in the config
+        try:
+            parallel_loader_config["n_proc"] = int(config.training.batch_n_proc),
+        except:
+            parallel_loader_config["n_proc"] = 8  # Default to 8 processes
+        
+        # Create the parallel loader
+        from mlff.data import QCMLDataLoaderSparseParallel
+        parallel_loader = QCMLDataLoaderSparseParallel(**parallel_loader_config)
+        
+        # Get data for training and validation using the split format
+        training_data = parallel_loader #split is handled inside the dataloader_sparse_tfds.py 
+        validation_data = parallel_loader
+
+        # split = getattr(loader, 'split', 'train')  # Default to 'train' if not specified)
+        # training_data = parallel_loader#.next_epoch(split=f'{split}[:{num_train}]', mode = 'train')
+        # validation_data = parallel_loader#.next_epoch(split=f'{split}[{-num_valid}:]', mode = 'validation')
+
         data_stats = None
         # Save the splits.
         with open(workdir / 'data_splits.json', 'w') as fp:
@@ -935,29 +1003,30 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
                 'For TFDSDataSets, energy shifting is not supported yet.'
             )
 
-        # Convert the units.
-        training_data = training_data.map(
-            lambda graph: data.transformations.unit_conversion_graph(
-                graph,
-                energy_unit=energy_unit,
-                length_unit=length_unit,
-                dipole_vec_unit=dipole_vec_unit
-            )
-        )
-        validation_data = validation_data.map(
-            lambda graph: data.transformations.unit_conversion_graph(
-                graph,
-                energy_unit=energy_unit,
-                length_unit=length_unit,
-                dipole_vec_unit=dipole_vec_unit
-            )
-        )
+        # TODO: Handle this inside the dataloader
+        # # Convert the units.
+        # training_data = training_data.map(
+        #     lambda graph: data.transformations.unit_conversion_graph(
+        #         graph,
+        #         energy_unit=energy_unit,
+        #         length_unit=length_unit,
+        #         dipole_vec_unit=dipole_vec_unit
+        #     )
+        # )
+        # validation_data = validation_data.map(
+        #     lambda graph: data.transformations.unit_conversion_graph(
+        #         graph,
+        #         energy_unit=energy_unit,
+        #         length_unit=length_unit,
+        #         dipole_vec_unit=dipole_vec_unit
+        #     )
+        # )
 
-        training_data = training_data.shuffle(
-            buffer_size=10_000,
-            reshuffle_each_iteration=True,
-            seed=config.training.training_seed
-        ).repeat(config.training.num_epochs)
+        # training_data = training_data.shuffle(
+        #     buffer_size=10_000,
+        #     reshuffle_each_iteration=True,
+        #     seed=config.training.training_seed
+        # ).repeat(config.training.num_epochs)
 
     return training_data, validation_data, data_stats
 
