@@ -23,8 +23,8 @@ and for sampling from the distribution.
 
 import jax.numpy as jnp
 import jax.random as random
-from robust_loss_jax import cubic_spline
-from robust_loss_jax import general
+from . import cubic_spline
+from . import general
 import os
 from pathlib import Path
 

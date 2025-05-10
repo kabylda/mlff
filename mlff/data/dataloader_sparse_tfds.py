@@ -173,34 +173,47 @@ class QCMLDataLoaderSparseParallel:
     """
     STOP_TOKEN = StopToken()
 
-    def __init__(self, **kwargs):
-        """Initialize the data loader with configuration parameters."""
-        self.data_cfg = kwargs  # Store config in data_cfg attribute
+    def __init__(self, config, input_folder, length_unit, energy_unit):
+        """Initialize the data loader with configuration parameters.
+        
+        Args:
+            config: The configuration object containing all necessary parameters.
+            input_folder: Path to the input data folder.
+            length_unit: Unit for length measurements.
+            energy_unit: Unit for energy measurements.
+        """
+        self.config = config
+        self.input_folder = input_folder
+        self.length_unit = length_unit
+        self.energy_unit = energy_unit
 
-        self.input_folder = self.data_cfg["input_folder"]
-
-        # check dataset version
+        # Check dataset version
         builder = tfds.builder_from_directory(self.input_folder)
- 
-        self.cutoff = self.data_cfg["cutoff"]
-        self.batch_max_num_nodes = self.data_cfg["batch_max_num_nodes"]
-        self.batch_max_num_edges = self.data_cfg["batch_max_num_edges"]
-        self.batch_max_num_graphs = self.data_cfg["batch_max_num_graphs"]
-        self.batch_max_num_pairs = self.data_cfg["batch_max_num_pairs"]
-        self.max_force_filter = self.data_cfg["max_force_filter"]
-        self.calculate_neighbors_lr = self.data_cfg["calculate_neighbors_lr"]
-        self.cutoff_lr = self.data_cfg["cutoff_lr"]
-        self.train_seed = self.data_cfg["train_seed"]
+        
+        # Set parameters from config
+        self.cutoff = config.model.cutoff / self.length_unit
+        self.batch_max_num_nodes = config.training.batch_max_num_nodes
+        self.batch_max_num_edges = config.training.batch_max_num_edges
+        self.batch_max_num_graphs = config.training.batch_max_num_graphs
+        self.batch_max_num_pairs = config.training.batch_max_num_pairs if config.training.batch_max_num_pairs is not None else 0
+        
+        # Get force filter if specified
+        self.max_force_filter = config.data.filter.max_force / self.energy_unit * self.length_unit if hasattr(config.data.filter, 'max_force') else 1.e6
+        
+        # Get long-range parameters
+        self.calculate_neighbors_lr = config.data.neighbors_lr_bool
+        self.cutoff_lr = config.data.neighbors_lr_cutoff / self.length_unit if self.calculate_neighbors_lr else None
+        
+        # Get training seed
+        self.train_seed = config.training.training_seed
 
-        if "n_proc" in self.data_cfg:
-            try:
-                self.n_proc = int(self.data_cfg["n_proc"][0])  # Access first element
-            except:
-                self.n_proc = int(self.data_cfg["n_proc"])  # Access first element
-
-        else:
-            print("Warning: No number of processes specified. Defaulting to 8.")
+        # Get number of processes
+        try:
+            self.n_proc = int(config.training.batch_n_proc)
+            print(f"Using {self.n_proc} processes for parallel data loading")
+        except:
             self.n_proc = 8
+            print("Warning: No number of processes specified. Defaulting to 8.")
 
         # multithread stuff # important
         ctx = get_context("spawn")

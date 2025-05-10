@@ -785,12 +785,14 @@ def run_fine_tuning(
 
 
 def data_loader_from_config(config):
-
+    # Initialize variables
+    loader = None
     tf_record_present = False
 
     data_filepath = data_path_from_config(config=config)
     energy_unit = energy_unit_from_config(config=config)
     length_unit = length_unit_from_config(config=config)
+
     if data_filepath.is_file():
         if data_filepath.suffix == '.npz':
             loader = data.NpzDataLoaderSparse(input_file=data_filepath)
@@ -810,11 +812,13 @@ def data_loader_from_config(config):
 
         if tf_record_present:
             max_force = config.data.filter.max_force
-            loader = data.QCMLDataLoaderSparseParallel(
-                input_folder=data_filepath,
-                split='train',
-                max_force_filter=max_force / energy_unit * length_unit if max_force is not None else None
-            )
+            loader = 'tfds_loader'
+            # loader = data.QCMLDataLoaderSparseParallel(
+            #     config=config,
+            #     input_folder=data_filepath,
+            #     length_unit=length_unit,
+            #     energy_unit=energy_unit
+            # )
         elif npz_record_present:
             loader = data.NpzDataLoaderSparse(
                 input_folder=data_filepath
@@ -823,6 +827,11 @@ def data_loader_from_config(config):
             loader = data.AseDataLoaderSparse(
                 input_folder=data_filepath
             )
+    else:
+        raise ValueError(f"Data path {data_filepath} does not exist or is not accessible")
+
+    if loader is None:
+        raise ValueError(f"Could not initialize data loader for path {data_filepath}")
 
     return loader, tf_record_present
 
@@ -839,13 +848,15 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
     length_unit = length_unit_from_config(config=config)
     dipole_vec_unit = dipole_vec_unit_from_config(config=config)
 
+    num_train = config.training.num_train
+    num_valid = config.training.num_valid
+
     # Get the total number of data points.
     if not tf_record_present:
         num_data = loader.cardinality()
     else:
         num_data = num_train+num_valid+1 #TODO: calculate cardinality in the tfds loader
-    num_train = config.training.num_train
-    num_valid = config.training.num_valid
+
 
     if num_train + num_valid > num_data:
         raise ValueError(
@@ -917,39 +928,19 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
                 'specified in the config file via training.batch_max_num_pairs.'
             )
         
-        # Use QCMLDataLoaderSparseParallel for parallel data loading
-        # Initialize the parallel loader with required parameters
-        parallel_loader_config = {
-            "input_folder": data_filepath,
-            "cutoff": config.model.cutoff / length_unit,
-            "batch_max_num_nodes": config.training.batch_max_num_nodes,
-            "batch_max_num_edges": config.training.batch_max_num_edges,
-            "batch_max_num_graphs": config.training.batch_max_num_graphs,
-            "batch_max_num_pairs": config.training.batch_max_num_pairs if config.training.batch_max_num_pairs is not None else 0,
-            "max_force_filter": loader.max_force_filter if hasattr(loader, 'max_force_filter') else 1.e6,
-            "calculate_neighbors_lr": config.data.neighbors_lr_bool,
-            "cutoff_lr": config.data.neighbors_lr_cutoff / length_unit if config.data.neighbors_lr_bool is True else None,
-            "train_seed": config.training.training_seed 
-
-        }
+        # Create the parallel loader with the full config
+        parallel_loader = data.QCMLDataLoaderSparseParallel(
+            config=config,
+            input_folder=data_filepath,
+            length_unit=length_unit,
+            energy_unit=energy_unit
+        )
         
-        # Add number of processes if specified in the config
-        try:
-            parallel_loader_config["n_proc"] = int(config.training.batch_n_proc),
-        except:
-            parallel_loader_config["n_proc"] = 8  # Default to 8 processes
-        
-        # Create the parallel loader
-        from mlff.data import QCMLDataLoaderSparseParallel
-        parallel_loader = QCMLDataLoaderSparseParallel(**parallel_loader_config)
-        
-        # Get data for training and validation using the split format
-        training_data = parallel_loader #split is handled inside the dataloader_sparse_tfds.py 
+        # Get data for training and validation
+        training_data = parallel_loader
         validation_data = parallel_loader
-
-        # split = getattr(loader, 'split', 'train')  # Default to 'train' if not specified)
-        # training_data = parallel_loader#.next_epoch(split=f'{split}[:{num_train}]', mode = 'train')
-        # validation_data = parallel_loader#.next_epoch(split=f'{split}[{-num_valid}:]', mode = 'validation')
+        # training_data = loader
+        # validation_data = loader
 
         data_stats = None
         # Save the splits.
