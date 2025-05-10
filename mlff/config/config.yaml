@@ -81,6 +81,7 @@ training:
   # batch_max_num_nodes, batch_max_num_edges and batch_max_num_of_graphs is exceeded.
   batch_max_num_graphs: 6  # Maximal number of graphs per batch.
   # Since there is one padding graph involved for an effective batch size of 5 corresponds to 6 max_num_graphs.
+  batch_n_proc: 1  # Number of processors used for queuing training batches, used only for TFDS dataloader
   eval_every_num_steps: 1000  # Number of gradient steps after which the metrics on the validation set are calculated.
   loss_weights:
     energy: 0.01  # Loss weight for the energy.
