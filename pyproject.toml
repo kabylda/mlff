@@ -28,7 +28,6 @@ ml_collections = "*"
 jraph = { git = "https://github.com/kabylda/jraph.git", branch = "master", optional = false }
 jax-md = { git = "https://github.com/kabylda/jax-md.git", branch = "main" , optional = false }
 glp = { git = "https://github.com/kabylda/glp.git", branch = "electrostatics_neighbourlist", optional = false }
-robust_loss_jax = { git = "https://github.com/google-research/google-research.git", rev = "master", subdirectory = "robust_loss_jax" }
 
 
 [tool.poetry.scripts]
