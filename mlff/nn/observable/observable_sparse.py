@@ -691,6 +691,7 @@ class ElectrostaticEnergyKspace(BaseSubModule):
     prop_keys: Dict
     partial_charges: Any
     do_ewald: bool = False
+    interpolation_nodes: int = 4
     ke: float = 14.399645351950548
     electrostatic_energy_scale: float = 1.0
     module_name: str = "electrostatic_energy_kspace"
@@ -702,7 +703,7 @@ class ElectrostaticEnergyKspace(BaseSubModule):
         if self.do_ewald:
             self.solver = ewald(get_potential())
         else:
-            self.solver = pme(get_potential())
+            self.solver = pme(get_potential(), interpolation_nodes=self.interpolation_nodes)
     
     @nn.compact
     def __call__(self, inputs: Dict, *args, **kwargs) -> Dict[str, jnp.ndarray]:

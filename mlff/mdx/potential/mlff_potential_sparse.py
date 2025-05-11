@@ -55,6 +55,7 @@ def load_model_from_workdir(
         cfg.neighborlist_format_lr = neighborlist_format
 
         cfg.electrostatic_energy_kspace_do_ewald_bool = long_range_kwargs.get('coulomb_kspace_do_ewald', False)
+        cfg.electrostatic_energy_kspace_interp_nodes = int(long_range_kwargs.get('coulomb_kspace_interp_nodes', 4))
 
         if dispersion_energy_bool is True:
             dispersion_energy_cutoff_lr_damping = long_range_kwargs['dispersion_energy_cutoff_lr_damping']
