@@ -724,8 +724,9 @@ class ElectrostaticEnergyKspace(BaseSubModule):
         assert cell is not None, "Cell must be provided for k-space calculation."
         assert k_smearing is not None, "k_smearing must be provided for k-space calculation."
 
-        reciprocal_cell = get_reciprocal(cell)
-        volume = jnp.abs(jnp.linalg.det(cell))
+        cell3x3 = jnp.diag(cell)
+        reciprocal_cell = get_reciprocal(cell3x3)
+        volume = jnp.abs(jnp.linalg.det(cell3x3))
         kvectors = generate_kvectors(
             reciprocal_cell, k_grid.shape, dtype=positions.dtype, for_ewald=self.do_ewald
         )
