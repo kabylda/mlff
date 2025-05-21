@@ -14,6 +14,9 @@ import yaml
 import logging
 import os
 from functools import partial, partialmethod
+import jax.numpy as jnp
+import jax
+import flax
 
 from ..utils import checkpoint_utils
 
@@ -328,8 +331,6 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
             model_seed=config.training.model_seed,
             log_gradient_values=config.training.log_gradient_values,
             num_epochs=config.training.num_epochs,
-            num_train=config.training.num_train,
-            num_valid=config.training.num_valid,
             use_wandb=use_wandb
         )
     logging.mlff('Training has finished!')
@@ -539,6 +540,12 @@ def run_fine_tuning(
     elif strategy == 'final_mlp':
         # Only the final MLP is refined
         trainable_subset_keys = ['observables_0']
+    elif strategy == 'final_mlp_and_hirshfeld':
+        # Only the final MLP and the Hirshfeld are refined
+        trainable_subset_keys = ['observables_0', 'observables_2']
+    elif strategy == 'hirshfeld':
+        # Only the Hirshfeld is refined
+        trainable_subset_keys = ['observables_2']
     elif strategy == 'last_layer':
         # Only the last MP layer is refined.
         trainable_subset_keys = [f'layers_{config.model.num_layers - 1}']
@@ -592,6 +599,35 @@ def run_fine_tuning(
 
     # Load the parameters from the model for fine-tuning.
     params = checkpoint_utils.load_params_from_workdir(start_from_workdir)
+    
+    # Print all parameter keys and shapes
+    def print_param_shapes(params, prefix=''):
+        if isinstance(params, dict):
+            for key, value in params.items():
+                if isinstance(value, (dict, jnp.ndarray)):
+                    if isinstance(value, jnp.ndarray):
+                        print(f"{prefix}{key}: {value.shape}")
+                    else:
+                        print(f"{prefix}{key}:")
+                        print_param_shapes(value, prefix + '  ')
+    
+    print("\nParameter shapes:")
+    print("=" * 50)
+    print_param_shapes(params)
+    print("=" * 50)
+    # Count total parameters
+    def count_params(params_dict):
+        total = 0
+        if isinstance(params_dict, dict):
+            for key, value in params_dict.items():
+                if isinstance(value, jnp.ndarray):
+                    total += value.size
+                elif isinstance(value, dict):
+                    total += count_params(value)
+        return total
+
+    total_params = count_params(params)
+    print(f"\nTotal number of parameters: {total_params:,}")
 
     # Get data filepath.
     data_filepath = data_path_from_config(config=config)
@@ -754,8 +790,6 @@ def run_fine_tuning(
             model_seed=config.training.model_seed,
             log_gradient_values=config.training.log_gradient_values,
             num_epochs=config.training.num_epochs,
-            num_train=config.training.num_train,
-            num_valid=config.training.num_valid,
             use_wandb=use_wandb
         )
     else:
@@ -785,53 +819,70 @@ def run_fine_tuning(
 
 
 def data_loader_from_config(config):
+    """Create a data loader from config.
+    
+    Args:
+        config: Configuration object
+        
+    Returns:
+        DataLoader instance and tf_record_present flag
+    """
     # Initialize variables
     loader = None
     tf_record_present = False
 
-    data_filepath = data_path_from_config(config=config)
+    # Get dataset paths and weights from config
+    if hasattr(config.data, 'datasets'):
+        # Multiple datasets case
+        dataset_paths = [Path(d['path']).expanduser().resolve() for d in config.data.datasets]
+        dataset_weights = [d.get('weight', 1.0) for d in config.data.datasets]
+        tf_record_present = all(len([1 for x in os.scandir(p) if Path(x).suffix[:9] == '.tfrecord']) > 0 for p in dataset_paths)
+    else:
+        # Single dataset case (original functionality)
+        dataset_paths = [data_path_from_config(config=config)]
+        dataset_weights = [1.0]
+        tf_record_present = len([1 for x in os.scandir(dataset_paths[0]) if Path(x).suffix[:9] == '.tfrecord']) > 0
+
     energy_unit = energy_unit_from_config(config=config)
     length_unit = length_unit_from_config(config=config)
 
-    if data_filepath.is_file():
-        if data_filepath.suffix == '.npz':
-            loader = data.NpzDataLoaderSparse(input_file=data_filepath)
-        elif data_filepath.stem[:5].lower() == 'spice':
-            logging.mlff(f'Found SPICE dataset at {data_filepath}.')
-            if data_filepath.suffix != '.hdf5':
-                raise ValueError(
-                    f'Loader assumes that SPICE is in hdf5 format. Found {data_filepath.suffix} as'
-                    f'suffix.')
-            loader = data.SpiceDataLoaderSparse(input_file=data_filepath)
-        else:
-            loader = data.AseDataLoaderSparse(input_file=data_filepath)
-
-    elif data_filepath.is_dir():
-        tf_record_present = len([1 for x in os.scandir(data_filepath) if Path(x).suffix[:9] == '.tfrecord']) > 0
-        npz_record_present = len([1 for x in os.scandir(data_filepath) if Path(x).suffix == '.npz']) > 0
-
-        if tf_record_present:
-            max_force = config.data.filter.max_force
-            loader = 'tfds_loader'
-            # loader = data.QCMLDataLoaderSparseParallel(
-            #     config=config,
-            #     input_folder=data_filepath,
-            #     length_unit=length_unit,
-            #     energy_unit=energy_unit
-            # )
-        elif npz_record_present:
-            loader = data.NpzDataLoaderSparse(
-                input_folder=data_filepath
-            )
-        else:
-            loader = data.AseDataLoaderSparse(
-                input_folder=data_filepath
-            )
+    if tf_record_present:
+        loader = data.QCMLDataLoaderSparseParallel(
+            config=config,
+            input_folders=dataset_paths,
+            dataset_weights=dataset_weights,
+            length_unit=length_unit,
+            energy_unit=energy_unit
+        )
     else:
-        raise ValueError(f"Data path {data_filepath} does not exist or is not accessible")
+        # Handle non-TFDS datasets
+        if len(dataset_paths) > 1:
+            raise ValueError("Multiple datasets are only supported with TFDS format")
+        
+        data_filepath = dataset_paths[0]
+        if data_filepath.is_file():
+            if data_filepath.suffix == '.npz':
+                loader = data.NpzDataLoaderSparse(input_file=data_filepath)
+            elif data_filepath.stem[:5].lower() == 'spice':
+                logging.mlff(f'Found SPICE dataset at {data_filepath}.')
+                if data_filepath.suffix != '.hdf5':
+                    raise ValueError(
+                        f'Loader assumes that SPICE is in hdf5 format. Found {data_filepath.suffix} as'
+                        f'suffix.')
+                loader = data.SpiceDataLoaderSparse(input_file=data_filepath)
+            else:
+                loader = data.AseDataLoaderSparse(input_file=data_filepath)
+        elif data_filepath.is_dir():
+            npz_record_present = len([1 for x in os.scandir(data_filepath) if Path(x).suffix == '.npz']) > 0
+            if npz_record_present:
+                loader = data.NpzDataLoaderSparse(input_folder=data_filepath)
+            else:
+                loader = data.AseDataLoaderSparse(input_folder=data_filepath)
+        else:
+            raise ValueError(f"Data path {data_filepath} does not exist or is not accessible")
 
     if loader is None:
-        raise ValueError(f"Could not initialize data loader for path {data_filepath}")
+        raise ValueError(f"Could not initialize data loader for paths {dataset_paths}")
 
     return loader, tf_record_present
 
@@ -841,12 +892,18 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
     config = config.lock()
 
     workdir = workdir_from_config(config=config)
-    data_filepath = data_path_from_config(config=config)
+    data_filepaths = data_path_from_config(config=config)
 
     # Extract the units from config.
     energy_unit = energy_unit_from_config(config=config)
     length_unit = length_unit_from_config(config=config)
     dipole_vec_unit = dipole_vec_unit_from_config(config=config)
+
+    # Get dataset weights if specified
+    if hasattr(config.data, 'datasets'):
+        dataset_weights = [d.get('weight', 1.0) for d in config.data.datasets]
+    else:
+        dataset_weights = [1.0]  # Default weight for single dataset
 
     num_train = config.training.num_train
     num_valid = config.training.num_valid
@@ -855,13 +912,13 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
     if not tf_record_present:
         num_data = loader.cardinality()
     else:
-        num_data = num_train+num_valid+1 #TODO: calculate cardinality in the tfds loader
-
+        num_data = loader.cardinality()
+        print(f"Number of points in train tfds split: {num_data}")
 
     if num_train + num_valid > num_data:
         raise ValueError(
             f"num_train + num_valid = {num_train + num_valid} exceeds the number of data points {num_data}"
-            f" in {data_filepath}."
+            f" in {data_filepaths}."
         )
     if not tf_record_present:
         split_seed = config.data.split_seed
@@ -929,18 +986,19 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
             )
         
         # Create the parallel loader with the full config
-        parallel_loader = data.QCMLDataLoaderSparseParallel(
-            config=config,
-            input_folder=data_filepath,
-            length_unit=length_unit,
-            energy_unit=energy_unit
-        )
+        # parallel_loader = data.QCMLDataLoaderSparseParallel(
+        #     config=config,
+        #     input_folders=data_filepaths,
+        #     dataset_weights=dataset_weights,
+        #     length_unit=length_unit,
+        #     energy_unit=energy_unit
+        # )
         
-        # Get data for training and validation
-        training_data = parallel_loader
-        validation_data = parallel_loader
-        # training_data = loader
-        # validation_data = loader
+        # # Get data for training and validation
+        # training_data = parallel_loader
+        # validation_data = parallel_loader
+        training_data = loader
+        validation_data = loader
 
         data_stats = None
         # Save the splits.
@@ -993,31 +1051,8 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
             raise NotImplementedError(
                 'For TFDSDataSets, energy shifting is not supported yet.'
             )
-
-        # TODO: Handle this inside the dataloader
-        # # Convert the units.
-        # training_data = training_data.map(
-        #     lambda graph: data.transformations.unit_conversion_graph(
-        #         graph,
-        #         energy_unit=energy_unit,
-        #         length_unit=length_unit,
-        #         dipole_vec_unit=dipole_vec_unit
-        #     )
-        # )
-        # validation_data = validation_data.map(
-        #     lambda graph: data.transformations.unit_conversion_graph(
-        #         graph,
-        #         energy_unit=energy_unit,
-        #         length_unit=length_unit,
-        #         dipole_vec_unit=dipole_vec_unit
-        #     )
-        # )
-
-        # training_data = training_data.shuffle(
-        #     buffer_size=10_000,
-        #     reshuffle_each_iteration=True,
-        #     seed=config.training.training_seed
-        # ).repeat(config.training.num_epochs)
+        # TODO: Handle unit conversion inside the dataloader
+            
 
     return training_data, validation_data, data_stats
 
@@ -1029,9 +1064,22 @@ def workdir_from_config(config):
 
 
 def data_path_from_config(config):
-    data_path = config.data.filepath
-    data_path = Path(data_path).expanduser().resolve()
-    return data_path
+    """Get the data path from the config.
+    
+    Args:
+        config: The configuration object.
+        
+    Returns:
+        List of paths to the input data folders.
+    """
+    if hasattr(config.data, 'datasets'):
+        # Handle multiple datasets
+        data_paths = [d['path'] for d in config.data.datasets]
+        return data_paths
+    else:
+        # Handle single dataset (backward compatibility)
+        data_path = config.data.filepath
+        return [data_path]  # Return as list for consistency
 
 
 def dipole_vec_unit_from_config(config):

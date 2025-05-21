@@ -1030,8 +1030,6 @@ def fit_from_iterator(
         batch_max_num_graphs,
         batch_max_num_pairs,
         num_epochs,
-        num_train,
-        num_valid,
         params=None,
         val_fn=None,
         ckpt_dir: str = None,
@@ -1058,8 +1056,6 @@ def fit_from_iterator(
         batch_max_num_graphs (int): Maximal number of graphs per batch.
         batch_max_num_pairs (int): Maximal number of pairs in long-range indices.
         num_epochs (int): Number of epochs to train for.
-        num_train (int): Number of training examples.
-        num_valid (int): Number of validation examples.
         params: Parameters to start from during training. If not given, either new parameters are initialized randomly
             or loaded from ckpt_dir if the checkpoint already exists and `allow_restart=True`.
         val_fn (Callable, optional): Validation function to use for metrics during validation. 
@@ -1118,8 +1114,8 @@ def fit_from_iterator(
     for epoch in range(num_epochs):
         if use_wandb:
             wandb.log({"epoch": epoch})
-
-        training_iterator_loop = training_iterator.next_epoch(split=f'train[:{num_train}]', mode = 'train')
+        print(f'Epoch {epoch} of {num_epochs}')
+        training_iterator_loop = training_iterator.next_epoch(split='train', mode='train')
         for graph_batch_training in training_iterator_loop:
             batch_training = graph_to_batch_fn(graph_batch_training)
             processed_graphs += batch_training['num_of_non_padded_graphs']
@@ -1136,10 +1132,6 @@ def fit_from_iterator(
                         params = checkpoint_utils.load_params_from_checkpoint(
                             ckpt_dir=ckpt_dir
                         )
-                        # params = ckpt_mngr.restore(
-                        #     latest_step,
-                        #     args=checkpoint.args.Composite(params=checkpoint.args.StandardRestore())
-                        # )['params']
                         step += latest_step
                         print(f'Re-start training from {latest_step}.')
                     else:
@@ -1170,19 +1162,10 @@ def fit_from_iterator(
 
             # Start validation process.
             if step % eval_every_num_steps == 0:
-    #           validation_iterator_batched = jraph.dynamically_batch(
-    #               validation_iterator.as_numpy_iterator(),
-    #               n_node=batch_max_num_nodes,
-    #               n_edge=batch_max_num_edges,
-    #               n_graph=batch_max_num_graphs,
-    #               n_pairs=batch_max_num_pairs
-    #           )
-
                 # Start iteration over validation batches.
                 eval_metrics: Any = None
                 eval_collection: Any = None
-                #for graph_batch_validation in validation_iterator_batched:
-                validation_iterator_loop = validation_iterator.next_epoch(split=f'train[-{num_valid}:]', mode = 'validation')
+                validation_iterator_loop = validation_iterator.next_epoch(split='train', mode='validation')
                 for graph_batch_validation in validation_iterator_loop:
                     batch_validation = graph_to_batch_fn(graph_batch_validation)
                     batch_validation = jax.tree_map(jnp.array, batch_validation)

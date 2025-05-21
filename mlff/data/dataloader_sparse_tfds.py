@@ -90,6 +90,8 @@ def create_graph_tuple_tf(
         globals_dict['num_unpaired_electrons'] = tf.reshape(element['multiplicity'], (1,)) - 1
     if 'charge' in properties:
         globals_dict['total_charge'] = tf.reshape(element['charge'], (1,))
+    if 'theory_level' in properties:
+        globals_dict['theory_level'] = tf.reshape(element['theory_level'], (1,))
     if 'stress' in properties:
         globals_dict['stress'] = tf.reshape(element['stress'], (1, 6))
     else:
@@ -147,7 +149,6 @@ class WorkerConfig:
     
     Contains all parameters needed by worker processes to load and process data.
     """
-    input_folder: str
     split: str
     cutoff: float
     batch_max_num_nodes: int
@@ -161,53 +162,61 @@ class WorkerConfig:
     calculate_neighbors_lr: bool
     cutoff_lr: float
     train_seed: int
-    
+    num_train: list
+    num_valid: list
+    mode: str
+    input_folders: list
+    dataset_weights: list
+
 class StopToken:
     """Token to signal that a worker has finished processing."""
     pass
 
 class QCMLDataLoaderSparseParallel:
-    """Parallel data loader for the QCML dataset.
-    
-    Uses multiple processes to load and preprocess data in parallel.
-    """
+    """Data loader for TFDS datasets that loads data in parallel."""
+
     STOP_TOKEN = StopToken()
 
-    def __init__(self, config, input_folder, length_unit, energy_unit):
+    def __init__(self, config, input_folders, dataset_weights, length_unit, energy_unit):
         """Initialize the data loader with configuration parameters.
         
         Args:
             config: The configuration object containing all necessary parameters.
-            input_folder: Path to the input data folder.
+            input_folders: List of paths to the input data folders.
+            dataset_weights: List of weights for each dataset.
             length_unit: Unit for length measurements.
             energy_unit: Unit for energy measurements.
         """
         self.config = config
-        self.input_folder = input_folder
+        self.input_folders = input_folders
+        self.dataset_weights = dataset_weights
         self.length_unit = length_unit
         self.energy_unit = energy_unit
 
-        # Check dataset version
-        builder = tfds.builder_from_directory(self.input_folder)
-        
         # Set parameters from config
+        self.calculate_neighbors_lr = config.data.neighbors_lr_bool
         self.cutoff = config.model.cutoff / self.length_unit
+        self.cutoff_lr = config.data.neighbors_lr_cutoff / self.length_unit if self.calculate_neighbors_lr else None
+        self.max_force_filter = config.data.filter.max_force / self.energy_unit * self.length_unit if hasattr(config.data.filter, 'max_force') else 1.e6
+        self.train_seed = config.training.training_seed
         self.batch_max_num_nodes = config.training.batch_max_num_nodes
         self.batch_max_num_edges = config.training.batch_max_num_edges
         self.batch_max_num_graphs = config.training.batch_max_num_graphs
         self.batch_max_num_pairs = config.training.batch_max_num_pairs if config.training.batch_max_num_pairs is not None else 0
-        
-        # Get force filter if specified
-        self.max_force_filter = config.data.filter.max_force / self.energy_unit * self.length_unit if hasattr(config.data.filter, 'max_force') else 1.e6
-        
-        # Get long-range parameters
-        self.calculate_neighbors_lr = config.data.neighbors_lr_bool
-        self.cutoff_lr = config.data.neighbors_lr_cutoff / self.length_unit if self.calculate_neighbors_lr else None
-        
-        # Get training seed
-        self.train_seed = config.training.training_seed
 
-        # Get number of processes
+        # Get per-dataset train/valid sizes
+        if hasattr(config.data, 'datasets'):
+            self.num_train = [d.get('num_train', 0) for d in config.data.datasets]
+            self.num_valid = [d.get('num_valid', 0) for d in config.data.datasets]
+            print(f"Total num_train: {sum(self.num_train)}")
+            print(f"Total num_valid: {sum(self.num_valid)}")
+        else:
+            self.num_train = [config.training.num_train]
+            self.num_valid = [config.training.num_valid]
+            print(f"Total num_train: {sum(self.num_train)}")
+            print(f"Total num_valid: {sum(self.num_valid)}")
+
+        #TODO: add checks for num_train and num_valid
         try:
             self.n_proc = int(config.training.batch_n_proc)
             print(f"Using {self.n_proc} processes for parallel data loading")
@@ -219,6 +228,32 @@ class QCMLDataLoaderSparseParallel:
         ctx = get_context("spawn")
         self.manager = ctx.Manager()
         self.executor = ProcessPoolExecutor(max_workers=self.n_proc, mp_context=ctx)
+
+        # Cache for cardinality
+        self._cardinality = None
+
+    def cardinality(self) -> int:
+        """Calculate total number of examples across all datasets.
+        
+        Returns:
+            Total number of examples in all datasets combined.
+        """
+        if self._cardinality is not None:
+            return self._cardinality
+
+        total_examples = 0
+        for i, folder in enumerate(self.input_folders):
+            builder = tfds.builder_from_directory(folder)
+            
+            # Calculate train examples
+            split = f'train'
+            dataset = builder.as_dataset(split=split)
+            count = tf.data.experimental.cardinality(dataset).numpy()
+            
+            total_examples += count
+        
+        self._cardinality = total_examples
+        return total_examples
 
     @staticmethod
     def _preprocess(dataset, 
@@ -243,10 +278,12 @@ class QCMLDataLoaderSparseParallel:
             calculate_neighbors_lr: Whether to calculate long-range neighbors
             cutoff_lr: Distance cutoff for long-range neighbors
             max_force_filter: Maximum force value for filtering
+            train_seed: Random seed for shuffling
             
         Returns:
             Batched dataset of graph tuples
         """
+        # First create graph tuples
         dataset = dataset.map(
             lambda element: create_graph_tuple_tf(
                 element,
@@ -255,16 +292,25 @@ class QCMLDataLoaderSparseParallel:
                 cutoff_lr=cutoff_lr
             ), 
             num_parallel_calls=tf.data.AUTOTUNE,
-        ).shuffle(
+        )
+
+        # Shuffle with weights
+        dataset = dataset.shuffle(
             buffer_size=10_000,
             reshuffle_each_iteration=True,
-            seed=train_seed 
-        ).prefetch(tf.data.AUTOTUNE
-        ).filter(
+            seed=train_seed
+        )
+
+        # Prefetch for better performance
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)
+
+        # Apply force filter
+        dataset = dataset.filter(
             lambda graph: tf.math.less(tf.math.reduce_max(graph.nodes['forces']), tf.constant(max_force_filter))
         )
         #TODO: need to add data.transformations.unit_conversion_graph before filtering 
 
+        # Create batches
         batched_dataset = jraph.dynamically_batch(
             dataset.as_numpy_iterator(),
             n_node=batch_max_num_nodes,
@@ -304,11 +350,22 @@ class QCMLDataLoaderSparseParallel:
                 shuffle_seed=config.shuffle_seed,
             )
 
-            # Note that tfds automatically pre-fetches after reading
-            # This might be suboptimal if we prefetch later and we can try to disable it
-            builder = tfds.builder_from_directory(config.input_folder)
-            dataset = builder.as_dataset(split=config.split, shuffle_files=True, read_config=read_config)
+            # Load all datasets
+            datasets = []
+            for i, folder in enumerate(config.input_folders):
+                builder = tfds.builder_from_directory(folder)
+                # Use per-dataset splits
+                if config.mode == 'train':
+                    split = f'train[:{config.num_train[i]}]'
+                else:  # validation
+                    split = f'train[-{config.num_valid[i]}:]'
+                dataset = builder.as_dataset(split=split, shuffle_files=True, read_config=read_config)
+                datasets.append(dataset)
 
+            # Combine datasets with weighted sampling
+            dataset = tf.data.Dataset.sample_from_datasets(datasets, weights=config.dataset_weights)
+
+            # Shard the combined dataset
             dataset = dataset.shard(num_shards=config.n_workers, index=config.worker_idx)
 
             for batch in QCMLDataLoaderSparseParallel._preprocess(dataset,   
@@ -328,12 +385,13 @@ class QCMLDataLoaderSparseParallel:
         finally:
             # Finished processing data, always put a stop token
             QCMLDataLoaderSparseParallel._safe_put(output_queue, QCMLDataLoaderSparseParallel.STOP_TOKEN)
-    
+
     def _generator(self, split, mode):
         """Generator reads data from the queue.
         
         Args:
             split: Dataset split to use
+            mode: 'train' or 'validation'
             
         Yields:
             Batches of data
@@ -343,28 +401,31 @@ class QCMLDataLoaderSparseParallel:
 
         for i in range(self.n_proc):
             config = WorkerConfig(
-                input_folder=self.input_folder,
+                worker_idx=i,
+                n_workers=self.n_proc,
                 split=split,
-                cutoff=self.cutoff,
+                shuffle_seed=shuffle_seed,
                 batch_max_num_nodes=self.batch_max_num_nodes,
                 batch_max_num_edges=self.batch_max_num_edges,
                 batch_max_num_graphs=self.batch_max_num_graphs,
                 batch_max_num_pairs=self.batch_max_num_pairs,
-                shuffle_seed=shuffle_seed,
-                n_workers=self.n_proc,
-                worker_idx=i,
+                cutoff=self.cutoff,
+                calculate_neighbors_lr=self.calculate_neighbors_lr,
+                cutoff_lr=self.cutoff_lr,
                 max_force_filter=self.max_force_filter,
                 train_seed=self.train_seed,
-                calculate_neighbors_lr=self.calculate_neighbors_lr,
-                cutoff_lr=self.cutoff_lr
+                input_folders=self.input_folders,
+                dataset_weights=self.dataset_weights,
+                num_train=self.num_train,
+                num_valid=self.num_valid,
+                mode=mode
             )
             self.executor.submit(QCMLDataLoaderSparseParallel._worker, config, output_queue)
-    
+
         n_stop_token = 0
         ctr = 0
         while True:
             ctr += 1
-
             try:
                 batch = output_queue.get(timeout=3)
             except queue.Empty:
@@ -399,10 +460,10 @@ class QCMLDataLoaderSparseParallel:
         """
         if mode == 'train': # use multiporcessing for training batch 
             return self._generator(split, mode)
-        else: #for now use single process for validation/test batch
-            return self._generator_sync(split)
+        else:
+            return self._generator_sync(split, mode)
 
-    def _generator_sync(self, split):
+    def _generator_sync(self, split, mode):
         """Synchronous data generator for single-process operation.
         
         Args:
@@ -411,18 +472,30 @@ class QCMLDataLoaderSparseParallel:
         Yields:
             Batches of data
         """
-        builder = tfds.builder_from_directory(self.input_folder)
-        dataset = builder.as_dataset(split=split, shuffle_files=True)
+        # Load all datasets
+        datasets = []
+        for i, folder in enumerate(self.input_folders):
+            builder = tfds.builder_from_directory(folder)
+            # Use per-dataset splits
+            if mode == 'train':
+                split = f'train[:{self.num_train[i]}]'
+            else:  # validation
+                split = f'train[-{self.num_valid[i]}:]'
+            dataset = builder.as_dataset(split=split, shuffle_files=True)
+            datasets.append(dataset)
+
+        # Combine datasets with weighted sampling
+        dataset = tf.data.Dataset.sample_from_datasets(datasets, weights=self.dataset_weights)
 
         for batch in self._preprocess(dataset, 
-                                     batch_max_num_nodes=self.batch_max_num_nodes,
-                                     batch_max_num_edges=self.batch_max_num_edges,
-                                     batch_max_num_graphs=self.batch_max_num_graphs,
-                                     batch_max_num_pairs=self.batch_max_num_pairs,
-                                     cutoff=self.cutoff,
-                                     calculate_neighbors_lr=self.calculate_neighbors_lr,
-                                     cutoff_lr=self.cutoff_lr,
-                                     max_force_filter=self.max_force_filter,
-                                     train_seed=self.train_seed
-                                    ):
+                                   batch_max_num_nodes=self.batch_max_num_nodes,
+                                   batch_max_num_edges=self.batch_max_num_edges,
+                                   batch_max_num_graphs=self.batch_max_num_graphs,
+                                   batch_max_num_pairs=self.batch_max_num_pairs,
+                                   cutoff=self.cutoff,
+                                   calculate_neighbors_lr=self.calculate_neighbors_lr,
+                                   cutoff_lr=self.cutoff_lr,
+                                   max_force_filter=self.max_force_filter,
+                                   train_seed=self.train_seed
+                                  ):
             yield batch

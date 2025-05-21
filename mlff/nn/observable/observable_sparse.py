@@ -63,6 +63,8 @@ class EnergySparse(BaseSubModule):
         batch_segments = inputs['batch_segments']  # (num_nodes)
         node_mask = inputs['node_mask']  # (num_nodes)
         graph_mask = inputs['graph_mask']  # (num_graphs)
+        theory_mask = inputs['theory_mask'] 
+        num_theory_levels = theory_mask.shape[-1]
 
         num_graphs = len(graph_mask)
         if self.learn_atomic_type_shifts:
@@ -70,10 +72,11 @@ class EnergySparse(BaseSubModule):
                 self.param(
                     'energy_offset',
                     nn.initializers.zeros_init(),
-                    (self.zmax + 1,)
+                    (self.zmax + 1, num_theory_levels)
                 ),
-                atomic_numbers
-            )  # (num_nodes)
+                atomic_numbers,
+                axis=0
+            )  # (num_nodes, num_levels_of_theory)
         else:
             energy_offset = jnp.zeros((1,), dtype=x.dtype)
 
@@ -82,8 +85,8 @@ class EnergySparse(BaseSubModule):
                 self.param(
                     'atomic_scales',
                     nn.initializers.ones_init(),
-                    (self.zmax + 1,)
-                ), atomic_numbers)  # (num_nodes)
+                    (self.zmax + 1, num_theory_levels)
+                ), atomic_numbers, axis=0)  # (num_nodes, num_levels_of_theory)
         else:
             atomic_scales = jnp.ones((1,), dtype=x.dtype)
 
@@ -95,21 +98,29 @@ class EnergySparse(BaseSubModule):
             )(x)  # (num_nodes, regression_dim)
             y = self.activation_fn(y)  # (num_nodes, regression_dim)
             atomic_energy = nn.Dense(
-                1,
+                num_theory_levels,
                 kernel_init=self.kernel_init,
-                use_bias=self.use_final_bias_bool,
+                # optional
+                use_bias=False,
                 name='energy_dense_final'
-            )(y).squeeze(axis=-1)  # (num_nodes)
+            )(y)  # (num_nodes, num_levels_of_theory)
         else:
             atomic_energy = nn.Dense(
-                1,
+                num_theory_levels,
+                # optional
+                use_bias=False,
                 kernel_init=self.kernel_init,
-                use_bias=self.use_final_bias_bool,
                 name='energy_dense_final'
-            )(x).squeeze(axis=-1)  # (num_nodes)
+            )(x) # (num_nodes, num_levels_of_theory)
 
         atomic_energy = atomic_energy * atomic_scales
-        atomic_energy += energy_offset  # (num_nodes)
+        atomic_energy += energy_offset  # (num_nodes, num_levels_of_theory)
+
+        atomic_energy = jnp.where(
+            theory_mask,
+            atomic_energy,
+            jnp.zeros_like(atomic_energy)
+        ).sum(axis=-1)  # (num_nodes)
 
         atomic_energy = safe_scale(atomic_energy, node_mask)
 
@@ -137,7 +148,6 @@ class EnergySparse(BaseSubModule):
 
         elif self.output_convention == 'per_atom':
             energy = atomic_energy  # (num_nodes)
-
             return dict(energy=energy)
 
         else:
@@ -186,6 +196,7 @@ class HirshfeldSparse(BaseSubModule):
                 x (Array): Atomic features, shape: (num_nodes, num_features)
                 atomic_numbers (Array): Atomic types, shape: (num_nodes)
                 node_mask (Array): Node mask, (num_nodes)
+                theory_mask (Array): Theory mask, (num_nodes, num_theory_levels)
             *args ():
             **kwargs ():
 
@@ -195,35 +206,41 @@ class HirshfeldSparse(BaseSubModule):
         x = inputs['x']  # (num_nodes, num_features)
         atomic_numbers = inputs['atomic_numbers']  # (num_nodes)
         node_mask = inputs['node_mask']  # (num_nodes)
+        theory_mask = inputs['theory_mask']  # (num_nodes, num_theory_levels)
+        num_theory_levels = theory_mask.shape[-1]
 
-        num_features = x.shape[-1]
-
-        v_shift = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
-        q = nn.Embed(num_embeddings=100, features=int(num_features / 2))(atomic_numbers)  # shape: (n,F/2)
+        # Element-dependent bias for each theory level
+        v_shift = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1) # shape: (num_nodes)
 
         if self.regression_dim is not None:
             y = nn.Dense(
-                int(self.regression_dim / 2),
+                self.regression_dim,
                 kernel_init=nn.initializers.lecun_normal(),
                 name='hirshfeld_ratios_dense_regression'
             )(x)  # (num_nodes, regression_dim)
             y = self.activation_fn(y)  # (num_nodes, regression_dim)
-            k = nn.Dense(
-                int(num_features / 2),
+            v_pred = nn.Dense(
+                num_theory_levels,
                 kernel_init=self.kernel_init,
                 name='hirshfeld_ratios_dense_final'
-            )(y)  # (num_nodes)
+            )(y)  # (num_nodes, num_theory_levels)
         else:
-            k = nn.Dense(
-                int(num_features / 2),
+            v_pred = nn.Dense(
+                num_theory_levels,
                 kernel_init=self.kernel_init,
                 name='hirshfeld_ratios_dense_final'
-            )(x)  # (num_nodes)
-
-        qk = (q * k / jnp.sqrt(k.shape[-1])).sum(axis=-1)
-
-        v_eff = v_shift + qk  # shape: (n)
-        hirshfeld_ratios = safe_scale(jnp.abs(v_eff), node_mask)
+            )(x)  # (num_nodes, num_theory_levels)
+        # Apply theory mask first
+        v_pred_masked = jnp.where(
+            theory_mask,
+            v_pred,
+            jnp.zeros_like(v_pred)
+        ).sum(axis=-1)
+        
+        # Add shift and take absolute value
+        v_eff = v_shift + v_pred_masked  # shape: (num_nodes)
+        hirshfeld_ratios = jnp.abs(v_eff) # (num_nodes)
+        hirshfeld_ratios = safe_scale(hirshfeld_ratios, node_mask)
 
         return dict(hirshfeld_ratios=hirshfeld_ratios)
 
