@@ -927,7 +927,11 @@ def fit(
                         params = checkpoint_utils.load_params_from_checkpoint(
                             ckpt_dir=ckpt_dir
                         )
+                        print(f"Loaded parameters from {ckpt_dir}")
+                        print(f"Params keys: {params.keys()}")
+                        print('This is fit function')
                         step += latest_step
+                        
                         print(f'Re-start training from {latest_step}.')
                     else:
                         raise RuntimeError(f'{ckpt_dir} already exists at step {latest_step}. If you want to re-start '
@@ -1132,6 +1136,51 @@ def fit_from_iterator(
                         params = checkpoint_utils.load_params_from_checkpoint(
                             ckpt_dir=ckpt_dir
                         )
+                        print(f"Loaded parameters from {ckpt_dir}")
+                        print(f"Params keys: {params.keys()}")
+                        print('This is fit_from_iterator function')
+                        # Modify parameters to handle theory levels
+                        if 'params' in params and 'observables_0' in params['params']:
+                            num_theory_levels = 16
+                            # Modify energy_offset
+                            if 'energy_offset' in params['params']['observables_0']:
+                                print("\nOriginal energy_offset:")
+                                print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+                                print("Values:", params['params']['observables_0']['energy_offset'])
+                                old_energy_offset = params['params']['observables_0']['energy_offset']
+                                # Create new energy_offset with shape (119, 3) by copying the old values
+                                new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+                                params['params']['observables_0']['energy_offset'] = new_energy_offset
+                                print("\nNew energy_offset:")
+                                print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+                                print("Values:", params['params']['observables_0']['energy_offset'])
+
+                            # Modify atomic_scales
+                            if 'atomic_scales' in params['params']['observables_0']:
+                                print("\nOriginal atomic_scales:")
+                                print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+                                print("Values:", params['params']['observables_0']['atomic_scales'])
+                                old_atomic_scales = params['params']['observables_0']['atomic_scales']
+                                # Create new atomic_scales with shape (119, 3) by copying the old values
+                                new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+                                params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+                                print("\nNew atomic_scales:")
+                                print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+                                print("Values:", params['params']['observables_0']['atomic_scales'])
+
+                            # Modify energy_dense_final
+                            if 'energy_dense_final' in params['params']['observables_0']:
+                                print("\nOriginal energy_dense_final kernel:")
+                                print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+                                print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+                                old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
+                                # Create new kernel with shape (128, 3) by copying the old values
+                                new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+                                params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+                                print("\nNew energy_dense_final kernel:")
+                                print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+                                print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+
                         step += latest_step
                         print(f'Re-start training from {latest_step}.')
                     else:

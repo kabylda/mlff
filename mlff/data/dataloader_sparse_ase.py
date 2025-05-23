@@ -197,6 +197,10 @@ def ASE_to_jraph(
         # Energy from ASE is only a scalar.
         energy = np.array([np.nan])
 
+    max_num_theory_levels = 16
+    theory_level = np.reshape(1, (1,))
+    theory_mask = np.eye(max_num_theory_levels)[theory_level] # (1, num_theory_levels)
+
     # Dipoles are NaN when not present.
     if dipole is None:
         dipole = np.empty((3, ))
@@ -278,6 +282,8 @@ def ASE_to_jraph(
     # as (num_graphs, ).
     global_context = {
         "energy": energy.reshape(-1),
+        "theory_level": theory_level.reshape(-1),
+        "theory_mask": theory_mask.reshape(1, max_num_theory_levels),
         "stress": stress.reshape(1, 6),
         "dipole_vec": dipole.reshape(1, 3),
         "total_charge": total_charge.reshape(-1),

@@ -615,6 +615,83 @@ def run_fine_tuning(
     print("=" * 50)
     print_param_shapes(params)
     print("=" * 50)
+
+    # Modify parameters to handle theory levels
+    if 'params' in params and 'observables_0' in params['params']:
+        # Extract shapes from charge parameters first before deleting them
+        # regression_kernel_shape = (128, 128)
+        # regression_bias_shape = (128,)
+        # final_kernel_shape = (128, 3)
+        # final_bias_shape = (3,)
+        num_theory_levels = 16 
+        
+        # # Initialize HirshfeldSparse parameters with shapes from charge parameters
+        # if 'hirshfeld_ratios_dense_regression' in params['params']['observables_2']:
+        #     print("\nInitializing hirshfeld_ratios_dense_regression with shapes from charge_dense_regression_vec")
+        #     kernel_key = jax.random.PRNGKey(0)
+        #     new_kernel = flax.linen.initializers.lecun_normal()(kernel_key, regression_kernel_shape)
+        #     params['params']['observables_2']['hirshfeld_ratios_dense_regression']['kernel'] = new_kernel
+            
+        #     # Also initialize bias using extracted bias shape
+        #     bias_key = jax.random.PRNGKey(1)
+        #     new_bias = jnp.zeros(regression_bias_shape)
+        #     params['params']['observables_2']['hirshfeld_ratios_dense_regression']['bias'] = new_bias
+        
+        # if 'hirshfeld_ratios_dense_final' in params['params']['observables_2']:
+        #     print("\nInitializing hirshfeld_ratios_dense_final with shapes from charge_dense_final_vec")
+        #     kernel_key = jax.random.PRNGKey(2)
+        #     new_kernel = flax.linen.initializers.lecun_normal()(kernel_key, final_kernel_shape)
+        #     params['params']['observables_2']['hirshfeld_ratios_dense_final']['kernel'] = new_kernel
+            
+        #     # Also initialize bias using extracted bias shape
+        #     bias_key = jax.random.PRNGKey(3)
+        #     new_bias = jnp.zeros(final_bias_shape)
+        #     params['params']['observables_2']['hirshfeld_ratios_dense_final']['bias'] = new_bias
+
+        # Modify energy_offset
+        if 'energy_offset' in params['params']['observables_0']:
+            print("\nOriginal energy_offset:")
+            print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            print("Values:", params['params']['observables_0']['energy_offset'])
+            old_energy_offset = params['params']['observables_0']['energy_offset']
+            # Create new energy_offset with shape (119, 3) by copying the old values
+            new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+            params['params']['observables_0']['energy_offset'] = new_energy_offset
+            print("\nNew energy_offset:")
+            print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            print("Values:", params['params']['observables_0']['energy_offset'])
+
+        # Modify atomic_scales
+        if 'atomic_scales' in params['params']['observables_0']:
+            print("\nOriginal atomic_scales:")
+            print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+            print("Values:", params['params']['observables_0']['atomic_scales'])
+            old_atomic_scales = params['params']['observables_0']['atomic_scales']
+            # Create new atomic_scales with shape (119, 3) by copying the old values
+            new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+            params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+            print("\nNew atomic_scales:")
+            print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+            print("Values:", params['params']['observables_0']['atomic_scales'])
+
+        # Modify energy_dense_final
+        if 'energy_dense_final' in params['params']['observables_0']:
+            print("\nOriginal energy_dense_final kernel:")
+            print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+            print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+            old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
+            # Create new kernel with shape (128, 3) by copying the old values
+            new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+            params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+            print("\nNew energy_dense_final kernel:")
+            print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+            print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+
+    print("\nParameter shapes after modification:")
+    print("=" * 50)
+    print_param_shapes(params)
+    print("=" * 50)
+
     # Count total parameters
     def count_params(params_dict):
         total = 0
@@ -839,9 +916,10 @@ def data_loader_from_config(config):
         tf_record_present = all(len([1 for x in os.scandir(p) if Path(x).suffix[:9] == '.tfrecord']) > 0 for p in dataset_paths)
     else:
         # Single dataset case (original functionality)
-        dataset_paths = [data_path_from_config(config=config)]
-        dataset_weights = [1.0]
-        tf_record_present = len([1 for x in os.scandir(dataset_paths[0]) if Path(x).suffix[:9] == '.tfrecord']) > 0
+        data_filepath = data_path_from_config(config=config)
+        #dataset_paths = data_path_from_config(config=config)
+#        dataset_weights = [1.0]
+#        tf_record_present = len([1 for x in os.scandir(dataset_paths[0]) if Path(x).suffix[:9] == '.tfrecord']) > 0
 
     energy_unit = energy_unit_from_config(config=config)
     length_unit = length_unit_from_config(config=config)
@@ -856,10 +934,10 @@ def data_loader_from_config(config):
         )
     else:
         # Handle non-TFDS datasets
-        if len(dataset_paths) > 1:
-            raise ValueError("Multiple datasets are only supported with TFDS format")
+#        if len(dataset_paths) > 1:
+#            raise ValueError("Multiple datasets are only supported with TFDS format")
         
-        data_filepath = dataset_paths[0]
+#        data_filepath = dataset_paths[0]
         if data_filepath.is_file():
             if data_filepath.suffix == '.npz':
                 loader = data.NpzDataLoaderSparse(input_file=data_filepath)
@@ -1079,7 +1157,8 @@ def data_path_from_config(config):
     else:
         # Handle single dataset (backward compatibility)
         data_path = config.data.filepath
-        return [data_path]  # Return as list for consistency
+        data_path = Path(data_path).expanduser().resolve()
+        return data_path  # Return as list for consistency
 
 
 def dipole_vec_unit_from_config(config):

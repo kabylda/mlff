@@ -28,35 +28,11 @@ def batch_info_fn(batched_graph: jraph.GraphsTuple):
         total_repeat_length=len(node_mask)
     )
 
-    # Get theory_level from globals (shape: (num_graphs,))
-    theory_level = batched_graph.globals.get('theory_level')
-    if theory_level is not None:
-        # Create one-hot encoded mask for each graph's theory level
-        # We'll use a fixed maximum number of theory levels (e.g., 3 for high, medium, low)
-        max_theory_levels = 3  # Fixed number of theory levels
-        graph_theory_mask = jnp.zeros((len(graph_mask), max_theory_levels), dtype=jnp.bool_)
-        # Only set True for valid theory levels (0, 1, 2)
-        valid_levels = (theory_level >= 0) & (theory_level < max_theory_levels)
-        graph_theory_mask = graph_theory_mask.at[jnp.arange(len(graph_mask)), theory_level].set(valid_levels)
-        
-        # Broadcast to node level
-        # shape: (num_nodes, num_theory_levels)
-        theory_mask = jnp.repeat(
-            graph_theory_mask,
-            repeats=batched_graph.n_node,
-            axis=0,
-            total_repeat_length=len(node_mask)
-        )
-    else:
-        # Default to single theory level if not provided
-        theory_mask = jnp.ones((len(node_mask), 1), dtype=jnp.bool_)
-
     return dict(
         node_mask=node_mask,
         graph_mask=graph_mask,
         batch_segments=batch_segments,
         num_of_non_padded_graphs=num_of_non_padded_graphs,
-        theory_mask=theory_mask,
     )
 
 
@@ -79,6 +55,7 @@ def graph_to_batch_fn(graph: jraph.GraphsTuple):
         idx_i_lr=graph.idx_i_lr,
         idx_j_lr=graph.idx_j_lr,
         theory_level=graph.globals.get('theory_level'),
+        theory_mask=graph.globals.get('theory_mask'),
     )
     batch_info = batch_info_fn(graph)
     batch.update(batch_info)

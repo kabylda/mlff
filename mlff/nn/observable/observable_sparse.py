@@ -63,8 +63,18 @@ class EnergySparse(BaseSubModule):
         batch_segments = inputs['batch_segments']  # (num_nodes)
         node_mask = inputs['node_mask']  # (num_nodes)
         graph_mask = inputs['graph_mask']  # (num_graphs)
-        theory_mask = inputs['theory_mask'] 
+        theory_mask = inputs['theory_mask'] # (num_graphs, num_theory_levels)
+        # theory_level = inputs['theory_level'] # (num_graphs)
+        
+        # Debug print total graphs and graphs per theory level
+        # total_graphs = jnp.sum(graph_mask)
+        # graphs_per_level = jnp.sum(theory_mask * graph_mask[:, None], axis=0)
+        # jax.debug.print("Total graphs (excluding padding): {}", total_graphs)
+        # jax.debug.print("Graphs per theory level: {}", graphs_per_level)
+
+
         num_theory_levels = theory_mask.shape[-1]
+        theory_mask = theory_mask[batch_segments] # (num_nodes, num_theory_levels)
 
         num_graphs = len(graph_mask)
         if self.learn_atomic_type_shifts:
@@ -206,41 +216,71 @@ class HirshfeldSparse(BaseSubModule):
         x = inputs['x']  # (num_nodes, num_features)
         atomic_numbers = inputs['atomic_numbers']  # (num_nodes)
         node_mask = inputs['node_mask']  # (num_nodes)
-        theory_mask = inputs['theory_mask']  # (num_nodes, num_theory_levels)
-        num_theory_levels = theory_mask.shape[-1]
+        # theory_mask = inputs['theory_mask']  # (num_nodes, num_theory_levels)
+        # num_theory_levels = theory_mask.shape[-1]
 
-        # Element-dependent bias for each theory level
-        v_shift = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1) # shape: (num_nodes)
+        # # Element-dependent bias
+        # v_shift = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1) # shape: (num_nodes)
+    
+        # if self.regression_dim is not None:
+        #     y = nn.Dense(
+        #         self.regression_dim,
+        #         kernel_init=nn.initializers.lecun_normal(),
+        #         name='hirshfeld_ratios_dense_regression'
+        #     )(x)  # (num_nodes, regression_dim)
+        #     y = self.activation_fn(y)  # (num_nodes, regression_dim)
+        #     v_pred = nn.Dense(
+        #         num_theory_levels,
+        #         kernel_init=self.kernel_init,
+        #         name='hirshfeld_ratios_dense_final'
+        #     )(y)  # (num_nodes, num_theory_levels)
+        # else:
+        #     v_pred = nn.Dense(
+        #         num_theory_levels,
+        #         kernel_init=self.kernel_init,
+        #         name='hirshfeld_ratios_dense_final'
+        #     )(x)  # (num_nodes, num_theory_levels)
+
+        # # Apply theory mask
+        # v_pred_masked = jnp.where(
+        #     theory_mask,
+        #     v_pred,
+        #     jnp.zeros_like(v_pred)
+        # ).sum(axis=-1)
+        
+        # # Add shift and take absolute value
+        # v_eff = v_shift + v_pred_masked  # shape: (num_nodes)
+        # hirshfeld_ratios = jnp.abs(v_eff) # (num_nodes)
+        # hirshfeld_ratios = safe_scale(hirshfeld_ratios, node_mask)
+
+        num_features = x.shape[-1]
+
+        v_shift = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
+        q = nn.Embed(num_embeddings=100, features=int(num_features / 2))(atomic_numbers)  # shape: (n,F/2)
 
         if self.regression_dim is not None:
             y = nn.Dense(
-                self.regression_dim,
+                int(self.regression_dim / 2),
                 kernel_init=nn.initializers.lecun_normal(),
                 name='hirshfeld_ratios_dense_regression'
             )(x)  # (num_nodes, regression_dim)
             y = self.activation_fn(y)  # (num_nodes, regression_dim)
-            v_pred = nn.Dense(
-                num_theory_levels,
+            k = nn.Dense(
+                int(num_features / 2),
                 kernel_init=self.kernel_init,
                 name='hirshfeld_ratios_dense_final'
-            )(y)  # (num_nodes, num_theory_levels)
+            )(y)  # (num_nodes)
         else:
-            v_pred = nn.Dense(
-                num_theory_levels,
+            k = nn.Dense(
+                int(num_features / 2),
                 kernel_init=self.kernel_init,
                 name='hirshfeld_ratios_dense_final'
-            )(x)  # (num_nodes, num_theory_levels)
-        # Apply theory mask first
-        v_pred_masked = jnp.where(
-            theory_mask,
-            v_pred,
-            jnp.zeros_like(v_pred)
-        ).sum(axis=-1)
-        
-        # Add shift and take absolute value
-        v_eff = v_shift + v_pred_masked  # shape: (num_nodes)
-        hirshfeld_ratios = jnp.abs(v_eff) # (num_nodes)
-        hirshfeld_ratios = safe_scale(hirshfeld_ratios, node_mask)
+            )(x)  # (num_nodes)
+
+        qk = (q * k / jnp.sqrt(k.shape[-1])).sum(axis=-1)
+
+        v_eff = v_shift + qk  # shape: (n)
+        hirshfeld_ratios = safe_scale(jnp.abs(v_eff), node_mask)
 
         return dict(hirshfeld_ratios=hirshfeld_ratios)
 
@@ -277,7 +317,7 @@ class PartialChargesSparse(BaseSubModule):
         num_graphs = len(graph_mask)
         num_nodes = len(node_mask)
 
-        # q_ - element-dependent bias
+        # Element-dependent bias
         q_ = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
 
         if self.regression_dim is not None:

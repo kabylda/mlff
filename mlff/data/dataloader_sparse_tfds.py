@@ -59,6 +59,7 @@ def create_graph_tuple_tf(
         cutoff: float,
         calculate_neighbors_lr: bool = False,
         cutoff_lr: Optional[float] = None,
+        max_num_theory_levels: int = 3, #get from the config
 ) -> jraph.GraphsTuple:
 
     """Takes a data element and wraps relevant components in a GraphsTuple."""
@@ -91,7 +92,10 @@ def create_graph_tuple_tf(
     if 'charge' in properties:
         globals_dict['total_charge'] = tf.reshape(element['charge'], (1,))
     if 'theory_level' in properties:
-        globals_dict['theory_level'] = tf.reshape(element['theory_level'], (1,))
+        theory_level = tf.reshape(element['theory_level'], (1,))
+        globals_dict['theory_level'] = theory_level
+        theory_mask = tf.one_hot(theory_level, depth=max_num_theory_levels)  # (1, num_theory_levels)
+        globals_dict['theory_mask'] = theory_mask
     if 'stress' in properties:
         globals_dict['stress'] = tf.reshape(element['stress'], (1, 6))
     else:
@@ -289,12 +293,13 @@ class QCMLDataLoaderSparseParallel:
                 element,
                 cutoff=cutoff,
                 calculate_neighbors_lr=calculate_neighbors_lr,
-                cutoff_lr=cutoff_lr
+                cutoff_lr=cutoff_lr,
+                max_num_theory_levels=16
             ), 
             num_parallel_calls=tf.data.AUTOTUNE,
         )
 
-        # Shuffle with weights
+        # Shuffle
         dataset = dataset.shuffle(
             buffer_size=10_000,
             reshuffle_each_iteration=True,
@@ -360,6 +365,10 @@ class QCMLDataLoaderSparseParallel:
                 else:  # validation
                     split = f'train[-{config.num_valid[i]}:]'
                 dataset = builder.as_dataset(split=split, shuffle_files=True, read_config=read_config)
+
+                if config.mode == 'train':
+                    dataset = dataset.repeat() # to avoid exhausting the smaller dataset, makes one epoch infinite
+
                 datasets.append(dataset)
 
             # Combine datasets with weighted sampling
@@ -379,6 +388,24 @@ class QCMLDataLoaderSparseParallel:
                                                 max_force_filter=config.max_force_filter,
                                                 train_seed=config.train_seed
                                                 ):
+                # # Get number of non-padded graphs and theory levels
+                # num_graphs = batch['num_of_non_padded_graphs']
+                # theory_levels = batch['theory_level']
+                # theory_mask = batch['theory_mask']
+                # graph_mask = batch['graph_mask']
+                
+                # # Count graphs per theory level
+                # # theory_counts = np.sum(theory_mask, axis=0)
+                # total_graphs = jnp.sum(graph_mask)
+                # graphs_per_level = jnp.sum(theory_mask * graph_mask[:, None], axis=0)
+                # # print(f"Batch contains {num_graphs} graphs")
+                # # for i, count in enumerate(theory_counts):
+                # #     print(f"  - Theory level {i}: {count} graphs")
+                # if wandb.run is not None:
+                #     wandb.log({"total_graphs": total_graphs})
+                #     wandb.log({"graphs_per_level_0": graphs_per_level[0]})
+                #     wandb.log({"graphs_per_level_1": graphs_per_level[1]})
+                #     wandb.log({"graphs_per_level_2": graphs_per_level[2]})
                 output_queue.put(batch)
         except Exception as e:
             print(f"[!] Error in worker {config.worker_idx}: {e}")
@@ -435,7 +462,7 @@ class QCMLDataLoaderSparseParallel:
                 print(f"[!] Unexpected error retrieving item from queue: {e}")
                 break
 
-            if ctr % 100 == 0:
+            if ctr % 1000 == 0:
                 size = output_queue.qsize()
                 if wandb.run is not None:
                     wandb.log({"queue_size_"+mode: size})
@@ -485,7 +512,7 @@ class QCMLDataLoaderSparseParallel:
             datasets.append(dataset)
 
         # Combine datasets with weighted sampling
-        dataset = tf.data.Dataset.sample_from_datasets(datasets, weights=self.dataset_weights)
+        dataset = tf.data.Dataset.sample_from_datasets(datasets) #, weights=self.dataset_weights)
 
         for batch in self._preprocess(dataset, 
                                    batch_max_num_nodes=self.batch_max_num_nodes,
