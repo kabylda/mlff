@@ -495,7 +495,7 @@ def coulomb_erf(
         return pairwise * jax.lax.erf(rij / _sigma)
     else:
         _cutoff = jnp.asarray(cutoff, dtype=input_dtype)
-        return pairwise * (jax.lax.erf(rij / _sigma) - jax.scipy.special.erf(rij / (_cutoff * jnp.sqrt(2.0))))
+        return pairwise * (jax.lax.erf(rij / _sigma) - jax.lax.erf(rij / (_cutoff * jnp.sqrt(2.0))))
 
 
 
