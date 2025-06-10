@@ -497,6 +497,59 @@ def coulomb_erf(
         _cutoff = jnp.asarray(cutoff, dtype=input_dtype)
         return pairwise * (jax.lax.erf(rij / _sigma) - jax.lax.erf(rij / (_cutoff * jnp.sqrt(2.0))))
 
+@partial(jax.jit, static_argnames=('neighborlist_format',))
+def coulomb_erf_shifted_force_smooth_pme(
+        q: jnp.ndarray,
+        rij: jnp.ndarray,
+        idx_i: jnp.ndarray,
+        idx_j: jnp.ndarray,
+        ke: float,
+        sigma: float,
+        cutoff: float = None,
+        cuton: float = None,
+        smearing: float = None,
+        neighborlist_format: str = 'sparse'
+) -> jnp.ndarray:
+
+    input_dtype = rij.dtype
+
+    if neighborlist_format == 'sparse':
+        c = jnp.asarray(0.5, dtype=input_dtype)
+    elif neighborlist_format == 'ordered_sparse':
+        c = jnp.asarray(1.0, dtype=input_dtype)
+    else:
+        raise ValueError(
+            f"neighborlist_format must be one of either 'ordered_sparse' or 'sparse'. "
+            f"received {neighborlist_format=}"
+        )
+
+    _ke = jnp.asarray(ke, dtype=input_dtype)
+    _sigma = jnp.asarray(sigma, dtype=input_dtype)
+    _smearing = jnp.asarray(smearing, dtype=input_dtype)* jnp.sqrt(2.0)
+    _cuton = jnp.asarray(cuton, dtype=input_dtype)
+
+    def potential(r):
+        return jax.lax.erf(r / _sigma) / r - jax.lax.erf(r / _smearing ) / r
+
+    def force1(r,cut):
+        return (2 * r * jnp.exp(-(r / cut) ** 2) / (jnp.sqrt(jnp.pi) * cut) - jax.lax.erf(r / cut)) / r ** 2
+
+    def force(r):
+        return force1(r, _sigma) - force1(r, _smearing)
+
+    _cutoff = jnp.asarray(cutoff, dtype=input_dtype)
+    f = switching_fn(rij, _cuton, _cutoff)
+    pairwise = potential(rij)
+    shift = potential(_cutoff)
+    force_shift = force(_cutoff)
+
+    shifted_potential = pairwise - shift - force_shift * (rij - _cutoff)
+
+    return jnp.where(
+        rij < _cutoff,
+        c * _ke * q[idx_i] * q[idx_j] * (f * (pairwise - shift) + (1 - f) * shifted_potential),
+        0.0
+    )
 
 
 @partial(jax.jit, static_argnames=('neighborlist_format',))
@@ -643,7 +696,8 @@ class ElectrostaticEnergySparse(BaseSubModule):
 
         # If cutoff is set, we apply damping with error function with smoothing to zero at cutoff_lr.
         # We also apply force shifting to reduce discontinuity artifacts.
-        if self.cutoff_lr is not None and k_smearing is None:
+        if self.cutoff_lr is not None:
+            if k_smearing is None:
                 # Calculate electrostatic energies per long-range edge
                 atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth(
                     partial_charges,
@@ -656,7 +710,19 @@ class ElectrostaticEnergySparse(BaseSubModule):
                     cuton=self.cutoff_lr * 0.45,
                     neighborlist_format=self.neighborlist_format
                 )
-
+            else:
+                atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth_pme(
+                    partial_charges,
+                    d_ij_lr,
+                    idx_i_lr,
+                    idx_j_lr,
+                    ke=self.ke,
+                    sigma=self.electrostatic_energy_scale,
+                    cutoff=self.cutoff_lr,
+                    cuton=4.5,
+                    smearing=k_smearing,
+                    neighborlist_format=self.neighborlist_format
+                )
 
         # If no cutoff is set, we just apply damping with error function and no explicit smoothing to zero.
         else:
@@ -668,7 +734,7 @@ class ElectrostaticEnergySparse(BaseSubModule):
                 idx_j_lr,
                 ke=self.ke,
                 sigma=self.electrostatic_energy_scale,
-                cutoff=k_smearing,
+                cutoff=None,
                 neighborlist_format=self.neighborlist_format
             )            
 
