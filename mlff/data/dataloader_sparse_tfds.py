@@ -71,14 +71,30 @@ def create_graph_tuple_tf(
 
     nodes_dict['positions'] = positions
     nodes_dict['atomic_numbers'] = atomic_numbers
+    num_atoms = tf.shape(atomic_numbers)[0]
 
     properties = element.keys()
-
     if 'energy' in properties:
         globals_dict['energy'] = tf.reshape(element['energy'], (1,))
+    else:
+        energy = np.empty((1,))
+        energy[:] = np.nan
+        globals_dict['energy'] = tf.convert_to_tensor(energy, dtype=tf.float32)
     if 'forces' in properties:
         nodes_dict['forces'] = element['forces']
-    if 'hirshfeld_ratios' in properties:
+    if 'theory_level' in properties:
+        theory_level = tf.reshape(element['theory_level'], (1,))
+        globals_dict['theory_level'] = theory_level
+        theory_mask = tf.one_hot(theory_level, depth=max_num_theory_levels)  # (1, num_theory_levels)
+        globals_dict['theory_mask'] = theory_mask
+    else:
+        # If no theory level is provided, assume a default value of 0.
+        theory_level = tf.constant([0], dtype=tf.int32)
+        globals_dict['theory_level'] = tf.reshape(theory_level, (1,))
+        theory_mask = tf.one_hot(theory_level, depth=max_num_theory_levels)
+        globals_dict['theory_mask'] = theory_mask
+
+    if 'hirshfeld_ratios' in properties: # and theory_level[0] == 0:  # Only include Hirshfeld ratios for theory level 0.
         nodes_dict['hirshfeld_ratios'] = element['hirshfeld_ratios']
     else:
         # Hack to deal with symbolic tensors, since this depends on the number of atoms in the molecule.
@@ -86,16 +102,12 @@ def create_graph_tuple_tf(
             tf.zeros_like(atomic_numbers, dtype=tf.float32) * tf.constant([np.nan], dtype=tf.float32),
             (-1, )
         )
-        globals_dict['hirshfeld_ratios'] = hirshfeld_ratios
+        nodes_dict['hirshfeld_ratios'] = hirshfeld_ratios
     if 'multiplicity' in properties:
         globals_dict['num_unpaired_electrons'] = tf.reshape(element['multiplicity'], (1,)) - 1
     if 'charge' in properties:
         globals_dict['total_charge'] = tf.reshape(element['charge'], (1,))
-    if 'theory_level' in properties:
-        theory_level = tf.reshape(element['theory_level'], (1,))
-        globals_dict['theory_level'] = theory_level
-        theory_mask = tf.one_hot(theory_level, depth=max_num_theory_levels)  # (1, num_theory_levels)
-        globals_dict['theory_mask'] = theory_mask
+
     if 'stress' in properties:
         globals_dict['stress'] = tf.reshape(element['stress'], (1, 6))
     else:
@@ -108,6 +120,21 @@ def create_graph_tuple_tf(
         dipole_vec = np.empty((1, 3))
         dipole_vec[:] = np.nan
         globals_dict['dipole_vec'] = tf.convert_to_tensor(dipole_vec, dtype=tf.float32)
+
+    # # Conditional dipole_vec reading based on number of atoms
+    # if 'dipole_vec' in properties:
+    #     # Use tf.cond for conditional execution in graph mode
+    #     dipole_vec = tf.cond(
+    #         tf.less(num_atoms, 50),
+    #         lambda: tf.reshape(element['dipole_vec'], (1, 3)),  # Read dipole if < max_atoms_for_dipole
+    #         lambda: tf.constant([[np.nan, np.nan, np.nan]], dtype=tf.float32)  # Set to NaN otherwise
+    #     )
+    #     globals_dict['dipole_vec'] = dipole_vec
+    # else:
+    #     # Default case when dipole_vec is not in properties
+    #     dipole_vec = np.empty((1, 3))
+    #     dipole_vec[:] = np.nan
+    #     globals_dict['dipole_vec'] = tf.convert_to_tensor(dipole_vec, dtype=tf.float32)
 
     centers, others = compute_edges_tf(
         positions=positions,
@@ -166,11 +193,11 @@ class WorkerConfig:
     calculate_neighbors_lr: bool
     cutoff_lr: float
     train_seed: int
-    num_train: list
-    num_valid: list
     mode: str
     input_folders: list
     dataset_weights: list
+    num_train: list
+    num_valid: list
 
 class StopToken:
     """Token to signal that a worker has finished processing."""
@@ -208,17 +235,22 @@ class QCMLDataLoaderSparseParallel:
         self.batch_max_num_graphs = config.training.batch_max_num_graphs
         self.batch_max_num_pairs = config.training.batch_max_num_pairs if config.training.batch_max_num_pairs is not None else 0
 
-        # Get per-dataset train/valid sizes
+        # num_train and num_valid can be used to limit the number of examples taken from TFDS splits
         if hasattr(config.data, 'datasets'):
-            self.num_train = [d.get('num_train', 0) for d in config.data.datasets]
-            self.num_valid = [d.get('num_valid', 0) for d in config.data.datasets]
-            print(f"Total num_train: {sum(self.num_train)}")
-            print(f"Total num_valid: {sum(self.num_valid)}")
+            self.num_train = [d.get('num_train', None) for d in config.data.datasets]
+            self.num_valid = [d.get('num_valid', None) for d in config.data.datasets]
         else:
-            self.num_train = [config.training.num_train]
-            self.num_valid = [config.training.num_valid]
-            print(f"Total num_train: {sum(self.num_train)}")
-            print(f"Total num_valid: {sum(self.num_valid)}")
+            self.num_train = [getattr(config.training, 'num_train', None)]
+            self.num_valid = [getattr(config.training, 'num_valid', None)]
+        
+        # Log information about train/valid limits
+        train_total = sum(x for x in self.num_train if x is not None)
+        valid_total = sum(x for x in self.num_valid if x is not None)
+        if train_total > 0 or valid_total > 0:
+            print(f"Using TFDS splits with limits: num_train={train_total if train_total > 0 else 'unlimited'}, "
+                  f"num_valid={valid_total if valid_total > 0 else 'unlimited'}")
+        else:
+            print("Using full TFDS splits without limits")
 
         #TODO: add checks for num_train and num_valid
         try:
@@ -237,10 +269,10 @@ class QCMLDataLoaderSparseParallel:
         self._cardinality = None
 
     def cardinality(self) -> int:
-        """Calculate total number of examples across all datasets.
+        """Calculate total number of examples across all datasets, respecting limits.
         
         Returns:
-            Total number of examples in all datasets combined.
+            Total number of examples considering num_train and num_valid limits.
         """
         if self._cardinality is not None:
             return self._cardinality
@@ -249,12 +281,23 @@ class QCMLDataLoaderSparseParallel:
         for i, folder in enumerate(self.input_folders):
             builder = tfds.builder_from_directory(folder)
             
-            # Calculate train examples
-            split = f'train'
-            dataset = builder.as_dataset(split=split)
-            count = tf.data.experimental.cardinality(dataset).numpy()
-            
-            total_examples += count
+            # Count examples across relevant splits, respecting limits
+            for split_name in ['train', 'validation', 'test']:
+                try:
+                    # Construct split string with limits if specified
+                    if split_name == 'train' and i < len(self.num_train) and self.num_train[i] is not None:
+                        split_str = f'train[:{self.num_train[i]}]'
+                    elif split_name == 'validation' and i < len(self.num_valid) and self.num_valid[i] is not None:
+                        split_str = f'validation[:{self.num_valid[i]}]'
+                    else:
+                        split_str = split_name
+                    
+                    dataset = builder.as_dataset(split=split_str)
+                    count = tf.data.experimental.cardinality(dataset).numpy()
+                    total_examples += count
+                except Exception:
+                    # Skip if split doesn't exist
+                    pass
         
         self._cardinality = total_examples
         return total_examples
@@ -299,6 +342,11 @@ class QCMLDataLoaderSparseParallel:
             num_parallel_calls=tf.data.AUTOTUNE,
         )
 
+        # Apply force filter
+        dataset = dataset.filter(
+            lambda graph: tf.math.less(tf.math.reduce_max(graph.nodes['forces']), tf.constant(max_force_filter))
+        )
+
         # Shuffle
         dataset = dataset.shuffle(
             buffer_size=10_000,
@@ -308,11 +356,6 @@ class QCMLDataLoaderSparseParallel:
 
         # Prefetch for better performance
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
-
-        # Apply force filter
-        dataset = dataset.filter(
-            lambda graph: tf.math.less(tf.math.reduce_max(graph.nodes['forces']), tf.constant(max_force_filter))
-        )
         #TODO: need to add data.transformations.unit_conversion_graph before filtering 
 
         # Create batches
@@ -359,11 +402,18 @@ class QCMLDataLoaderSparseParallel:
             datasets = []
             for i, folder in enumerate(config.input_folders):
                 builder = tfds.builder_from_directory(folder)
-                # Use per-dataset splits
+                # Use proper TFDS splits created by xyz_to_tfds_6.py with optional limits
                 if config.mode == 'train':
-                    split = f'train[:{config.num_train[i]}]'
+                    if i < len(config.num_train) and config.num_train[i] is not None:
+                        split = f'train[:{config.num_train[i]}]'
+                    else:
+                        split = 'train'
                 else:  # validation
-                    split = f'train[-{config.num_valid[i]}:]'
+                    if i < len(config.num_valid) and config.num_valid[i] is not None:
+                        split = f'validation[:{config.num_valid[i]}]'
+                    else:
+                        split = 'validation'
+                
                 dataset = builder.as_dataset(split=split, shuffle_files=True, read_config=read_config)
 
                 if config.mode == 'train':
@@ -503,12 +553,20 @@ class QCMLDataLoaderSparseParallel:
         datasets = []
         for i, folder in enumerate(self.input_folders):
             builder = tfds.builder_from_directory(folder)
-            # Use per-dataset splits
+            # Use proper TFDS splits created by xyz_to_tfds_6.py with optional limits
             if mode == 'train':
-                split = f'train[:{self.num_train[i]}]'
+                if i < len(self.num_train) and self.num_train[i] is not None:
+                    split = f'train[:{self.num_train[i]}]'
+                else:
+                    split = 'train'
             else:  # validation
-                split = f'train[-{self.num_valid[i]}:]'
+                if i < len(self.num_valid) and self.num_valid[i] is not None:
+                    split = f'validation[:{self.num_valid[i]}]'
+                else:
+                    split = 'validation'
+            
             dataset = builder.as_dataset(split=split, shuffle_files=True)
+            
             datasets.append(dataset)
 
         # Combine datasets with weighted sampling

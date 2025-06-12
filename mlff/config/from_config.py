@@ -131,6 +131,7 @@ def make_itp_net_from_config(config: config_dict.ConfigDict):
         dispersion_energy_cutoff_lr_damping=model_config.dispersion_energy_cutoff_lr_damping,
         dispersion_energy_scale=model_config.dispersion_energy_scale,
         zbl_repulsion_bool=model_config.zbl_repulsion_bool,
+        use_final_bias_bool=model_config.get('use_final_bias_bool', True),
         neighborlist_format_lr=config.neighborlist_format_lr,
     )
 
@@ -233,7 +234,9 @@ def run_training(config: config_dict.ConfigDict, model: str = 'so3krates'):
 
     val_fn = training_utils.make_val_fn(
         get_energy_and_force_fn_sparse(net),
-        weights=config.training.loss_weights
+        weights=config.training.loss_weights,
+        use_robust_loss=config.training.get('use_robust_loss_validation', False),
+        robust_loss_alpha=config.training.get('robust_loss_alpha_validation', 1.99)
     )
 
     if config.training.batch_max_num_nodes is None:
@@ -485,6 +488,103 @@ def run_evaluation(
 
     params = checkpoint_utils.load_params_from_checkpoint(ckpt_dir=ckpt_dir)
 
+    
+    # Print all parameter keys and shapes
+    def print_param_shapes(params, prefix=''):
+        if isinstance(params, dict):
+            for key, value in params.items():
+                if isinstance(value, (dict, jnp.ndarray)):
+                    if isinstance(value, jnp.ndarray):
+                        print(f"{prefix}{key}: {value.shape}")
+                    else:
+                        print(f"{prefix}{key}:")
+                        print_param_shapes(value, prefix + '  ')
+    
+    print("\nParameter shapes:")
+    print("=" * 50)
+    print_param_shapes(params)
+    print("=" * 50)
+
+    # Modify parameters to handle theory levels
+    if 'params' in params and 'observables_0' in params['params']:
+        num_theory_levels = 16 
+        
+        # Modify energy_offset
+        if 'energy_offset' in params['params']['observables_0']:
+            print("\nOriginal energy_offset:")
+            print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            print("Values:", params['params']['observables_0']['energy_offset'])
+            old_energy_offset = params['params']['observables_0']['energy_offset']
+            
+            # Only tile if shape is 1D
+            if len(old_energy_offset.shape) == 1:
+                new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+                params['params']['observables_0']['energy_offset'] = new_energy_offset
+                print("Applied tiling to energy_offset")
+            else:
+                print("Energy offset already has multiple dimensions, no tiling applied")
+            
+            print("\nNew energy_offset:")
+            print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            print("Values:", params['params']['observables_0']['energy_offset'])
+
+        # Modify atomic_scales
+        if 'atomic_scales' in params['params']['observables_0']:
+            print("\nOriginal atomic_scales:")
+            print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+            print("Values:", params['params']['observables_0']['atomic_scales'])
+            old_atomic_scales = params['params']['observables_0']['atomic_scales']
+            
+            # Only tile if shape is 1D
+            if len(old_atomic_scales.shape) == 1:
+                new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+                params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+                print("Applied tiling to atomic_scales")
+            else:
+                print("Atomic scales already has multiple dimensions, no tiling applied")
+            
+            print("\nNew atomic_scales:")
+            print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+            print("Values:", params['params']['observables_0']['atomic_scales'])
+
+        # Modify energy_dense_final
+        if 'energy_dense_final' in params['params']['observables_0']:
+            print("\nOriginal energy_dense_final kernel:")
+            print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+            print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+            old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
+            
+            # Check the shape to determine if tiling is needed
+            if old_kernel.shape[1] == 1:
+                new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+                params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+                print("Applied tiling to energy_dense_final kernel")
+            else:
+                print("Energy dense final kernel already has correct output dimension, no tiling applied")
+            
+            print("\nNew energy_dense_final kernel:")
+            print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+            print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+
+    print("\nParameter shapes after modification:")
+    print("=" * 50)
+    print_param_shapes(params)
+    print("=" * 50)
+
+    # Count total parameters
+    def count_params(params_dict):
+        total = 0
+        if isinstance(params_dict, dict):
+            for key, value in params_dict.items():
+                if isinstance(value, jnp.ndarray):
+                    total += value.size
+                elif isinstance(value, dict):
+                    total += count_params(value)
+        return total
+
+    total_params = count_params(params)
+    print(f"\nTotal number of parameters: {total_params:,}")
+
     logging.mlff(f'... done.')
 
     if model == 'so3krates':
@@ -618,35 +718,7 @@ def run_fine_tuning(
 
     # Modify parameters to handle theory levels
     if 'params' in params and 'observables_0' in params['params']:
-        # Extract shapes from charge parameters first before deleting them
-        # regression_kernel_shape = (128, 128)
-        # regression_bias_shape = (128,)
-        # final_kernel_shape = (128, 3)
-        # final_bias_shape = (3,)
         num_theory_levels = 16 
-        
-        # # Initialize HirshfeldSparse parameters with shapes from charge parameters
-        # if 'hirshfeld_ratios_dense_regression' in params['params']['observables_2']:
-        #     print("\nInitializing hirshfeld_ratios_dense_regression with shapes from charge_dense_regression_vec")
-        #     kernel_key = jax.random.PRNGKey(0)
-        #     new_kernel = flax.linen.initializers.lecun_normal()(kernel_key, regression_kernel_shape)
-        #     params['params']['observables_2']['hirshfeld_ratios_dense_regression']['kernel'] = new_kernel
-            
-        #     # Also initialize bias using extracted bias shape
-        #     bias_key = jax.random.PRNGKey(1)
-        #     new_bias = jnp.zeros(regression_bias_shape)
-        #     params['params']['observables_2']['hirshfeld_ratios_dense_regression']['bias'] = new_bias
-        
-        # if 'hirshfeld_ratios_dense_final' in params['params']['observables_2']:
-        #     print("\nInitializing hirshfeld_ratios_dense_final with shapes from charge_dense_final_vec")
-        #     kernel_key = jax.random.PRNGKey(2)
-        #     new_kernel = flax.linen.initializers.lecun_normal()(kernel_key, final_kernel_shape)
-        #     params['params']['observables_2']['hirshfeld_ratios_dense_final']['kernel'] = new_kernel
-            
-        #     # Also initialize bias using extracted bias shape
-        #     bias_key = jax.random.PRNGKey(3)
-        #     new_bias = jnp.zeros(final_bias_shape)
-        #     params['params']['observables_2']['hirshfeld_ratios_dense_final']['bias'] = new_bias
 
         # Modify energy_offset
         if 'energy_offset' in params['params']['observables_0']:
@@ -654,9 +726,15 @@ def run_fine_tuning(
             print("Shape:", params['params']['observables_0']['energy_offset'].shape)
             print("Values:", params['params']['observables_0']['energy_offset'])
             old_energy_offset = params['params']['observables_0']['energy_offset']
-            # Create new energy_offset with shape (119, 3) by copying the old values
-            new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
-            params['params']['observables_0']['energy_offset'] = new_energy_offset
+            
+            # Only tile if shape is 1D
+            if len(old_energy_offset.shape) == 1:
+                new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+                params['params']['observables_0']['energy_offset'] = new_energy_offset
+                print("Applied tiling to energy_offset")
+            else:
+                print("Energy offset already has multiple dimensions, no tiling applied")
+            
             print("\nNew energy_offset:")
             print("Shape:", params['params']['observables_0']['energy_offset'].shape)
             print("Values:", params['params']['observables_0']['energy_offset'])
@@ -667,9 +745,15 @@ def run_fine_tuning(
             print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
             print("Values:", params['params']['observables_0']['atomic_scales'])
             old_atomic_scales = params['params']['observables_0']['atomic_scales']
-            # Create new atomic_scales with shape (119, 3) by copying the old values
-            new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
-            params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+            
+            # Only tile if shape is 1D
+            if len(old_atomic_scales.shape) == 1:
+                new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+                params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+                print("Applied tiling to atomic_scales")
+            else:
+                print("Atomic scales already has multiple dimensions, no tiling applied")
+            
             print("\nNew atomic_scales:")
             print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
             print("Values:", params['params']['observables_0']['atomic_scales'])
@@ -680,9 +764,15 @@ def run_fine_tuning(
             print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
             print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
             old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
-            # Create new kernel with shape (128, 3) by copying the old values
-            new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
-            params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+            
+            # Check the shape to determine if tiling is needed
+            if old_kernel.shape[1] == 1:
+                new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+                params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+                print("Applied tiling to energy_dense_final kernel")
+            else:
+                print("Energy dense final kernel already has correct output dimension, no tiling applied")
+            
             print("\nNew energy_dense_final kernel:")
             print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
             print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
@@ -779,7 +869,9 @@ def run_fine_tuning(
 
     val_fn = training_utils.make_val_fn(
         get_energy_and_force_fn_sparse(net),
-        weights=config.training.loss_weights
+        weights=config.training.loss_weights,
+        use_robust_loss=config.training.get('use_robust_loss_validation', False),
+        robust_loss_alpha=config.training.get('robust_loss_alpha_validation', 1.99)
     )
 
     if config.training.batch_max_num_nodes is None:
