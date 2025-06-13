@@ -16,353 +16,9 @@ from ..utils import gradient_utils
 from ..utils import checkpoint_utils
 
 from .robust_loss_jax import distribution as robust_loss_dist
-# def interpolate1d(x, values, tangents):
-#   r"""Perform cubic hermite spline interpolation on a 1D spline.
-
-#   The x coordinates of the spline knots are at [0 : len(values)-1].
-#   Queries outside of the range of the spline are computed using linear
-#   extrapolation. See https://en.wikipedia.org/wiki/Cubic_Hermite_spline
-#   for details, where "x" corresponds to `x`, "p" corresponds to `values`, and
-#   "m" corresponds to `tangents`.
-
-#   Args:
-#     x: A tensor containing the set of values to be used for interpolation into
-#       the spline.
-#     values: A vector containing the value of each knot of the spline being
-#       interpolated into. Must be the same length as `tangents`.
-#     tangents: A vector containing the tangent (derivative) of each knot of the
-#       spline being interpolated into. Must be the same length as `values` and
-#       the same type as `x`.
-
-#   Returns:
-#     The result of interpolating along the spline defined by `values`, and
-#     `tangents`, using `x` as the query values. Will be the same shape as `x`.
-#   """
-#   assert len(values.shape) == 1
-#   assert len(tangents.shape) == 1
-#   assert values.shape[0] == tangents.shape[0]
-
-#   # Find the indices of the knots below and above each x.
-#   x_lo = jnp.int32(jnp.floor(jnp.clip(x, 0., values.shape[0] - 2)))
-#   x_hi = x_lo + 1
-
-#   # Compute the relative distance between each `x` and the knot below it.
-#   t = x - x_lo
-
-#   # Compute the cubic hermite expansion of `t`.
-#   t_sq = t**2
-#   t_cu = t * t_sq
-#   h01 = -2 * t_cu + 3 * t_sq
-#   h00 = 1 - h01
-#   h11 = t_cu - t_sq
-#   h10 = h11 - t_sq + t
-
-#   # Linearly extrapolate above and below the extents of the spline for all
-#   # values.
-#   value_before = tangents[0] * t + values[0]
-#   value_after = tangents[-1] * (t - 1) + values[-1]
-
-#   # Cubically interpolate between the knots below and above each query point.
-#   neighbor_values_lo = jnp.take(values, x_lo)
-#   neighbor_values_hi = jnp.take(values, x_hi)
-#   neighbor_tangents_lo = jnp.take(tangents, x_lo)
-#   neighbor_tangents_hi = jnp.take(tangents, x_hi)
-
-#   value_mid = (
-#       neighbor_values_lo * h00 + neighbor_values_hi * h01 +
-#       neighbor_tangents_lo * h10 + neighbor_tangents_hi * h11)
-
-#   # Return the interpolated or extrapolated values for each query point,
-#   # depending on whether or not the query lies within the span of the spline.
-#   return jnp.where(t < 0., value_before,
-#                    jnp.where(t > 1., value_after, value_mid))
-
-# @jax.custom_jvp
-# def fake_clip(a, a_min, a_max):
-#   """jnp.clip() but the gradient doesn't get clipped on the backward pass."""
-#   return jnp.clip(a, a_min, a_max)
-
-
-# @fake_clip.defjvp
-# def fake_clip_jvp(primals, tangents):
-#   """Override fake_clip()'s gradient so that it's a no-op."""
-#   return jnp.clip(*primals), tangents[0]
-
-
-# @jax.jit
-# def lossfun(x, alpha, scale):
-#   r"""Implements the general form of the loss.
-
-#   This implements the rho(x, \alpha, c) function described in "A General and
-#   Adaptive Robust Loss Function", Jonathan T. Barron,
-#   https://arxiv.org/abs/1701.03077.
-
-#   Args:
-#     x: The residual for which the loss is being computed. x can have any shape,
-#       and alpha and scale will be broadcasted to match x's shape if necessary.
-#     alpha: The shape parameter of the loss (\alpha in the paper), where more
-#       negative values produce a loss with more robust behavior (outliers "cost"
-#       less), and more positive values produce a loss with less robust behavior
-#       (outliers are penalized more heavily). Alpha can be any value in
-#       [-infinity, infinity], but the gradient of the loss with respect to alpha
-#       is 0 at -infinity, infinity, 0, and 2. Varying alpha allows for smooth
-#       interpolation between several discrete robust losses:
-#         alpha=-Infinity: Welsch/Leclerc Loss.
-#         alpha=-2: Geman-McClure loss.
-#         alpha=0: Cauchy/Lortentzian loss.
-#         alpha=1: Charbonnier/pseudo-Huber loss.
-#         alpha=2: L2 loss.
-#     scale: The scale parameter of the loss. When |x| < scale, the loss is an
-#       L2-like quadratic bowl, and when |x| > scale the loss function takes on a
-#       different shape according to alpha.
-
-#   Returns:
-#     The losses for each element of x, in the same shape as x.
-#   """
-#   eps = jnp.finfo(jnp.float32).eps
-#   maxval = 1e15
-
-#   # A "safe" versions of expm1 that will not NaN-out on large inputs.
-#   expm1_safe = lambda x: jnp.expm1(jnp.minimum(x, 43))
-
-#   # `scale` must be > 0.
-#   scale = jnp.maximum(eps, scale)
-
-#   # Large values of |x| can cause non-finite gradients.
-#   x = fake_clip(x, -maxval, maxval)
-
-#   # The loss when alpha == 2. This will get reused repeatedly.
-#   loss_two = 0.5 * (x / scale)**2
-
-#   # Clamp |alpha| to be >= machine epsilon so that it's safe to divide by.
-#   a = jnp.where(alpha >= 0, jnp.ones_like(alpha),
-#                 -jnp.ones_like(alpha)) * jnp.maximum(eps, jnp.abs(alpha))
-
-#   # Clamp |2-alpha| to be >= machine epsilon so that it's safe to divide by.
-#   b = jnp.maximum(eps, jnp.abs(a - 2))
-
-#   # The loss when not in one of the special casess.
-#   loss_ow = (b / a) * ((loss_two / (0.5 * b) + 1)**(0.5 * a) - 1)
-
-#   # Select which of the cases of the loss to return as a function of alpha.
-#   return jnp.where(
-#       alpha == -jnp.inf, -expm1_safe(-loss_two),
-#       jnp.where(
-#           alpha == 0, jnp.log1p(loss_two),
-#           jnp.where(alpha == 2, loss_two,
-#                     jnp.where(alpha == jnp.inf, expm1_safe(loss_two),
-#                               loss_ow))))
-
-# import jax.random as random
-# #from robust_loss_jax import cubic_spline
-# #from robust_loss_jax import general
-
-
-# def get_resource_as_file(path):
-#   """A uniform interface for internal/open-source files."""
-
-#   class NullContextManager(object):
-
-#     def __init__(self, dummy_resource=None):
-#       self.dummy_resource = dummy_resource
-
-#     def __enter__(self):
-#       return self.dummy_resource
-
-#     def __exit__(self, *args):
-#       pass
-
-#   #return NullContextManager('./' + path)
-#   return NullContextManager(path)
-
-
-# def get_resource_filename(path):
-#   """A uniform interface for internal/open-source filenames."""
-#   #return './' + path
-#   return path
-
-
-# def partition_spline_curve(alpha):
-#   """Applies a curve to alpha >= 0 to compress its range before interpolation.
-
-#   This is a weird hand-crafted function designed to take in alpha values and
-#   curve them to occupy a short finite range that works well when using spline
-#   interpolation to model the partition function Z(alpha). Because Z(alpha)
-#   is only varied in [0, 4] and is especially interesting around alpha=2, this
-#   curve is roughly linear in [0, 4] with a slope of ~1 at alpha=0 and alpha=4
-#   but a slope of ~10 at alpha=2. When alpha > 4 the curve becomes logarithmic.
-#   Some (input, output) pairs for this function are:
-#     [(0, 0), (1, ~1.2), (2, 4), (3, ~6.8), (4, 8), (8, ~8.8), (400000, ~12)]
-#   This function is continuously differentiable.
-
-#   Args:
-#     alpha: A tensor with values >= 0.
-
-#   Returns:
-#     A tensor of curved values >= 0 with the same type as `alpha`, to be
-#     used as input x-coordinates for spline interpolation.
-#   """
-#   log_safe = lambda z: jnp.log(jnp.minimum(z, 3e37))
-#   x = jnp.where(alpha < 4,
-#                 (2.25 * alpha - 4.5) / (jnp.abs(alpha - 2) + 0.25) + alpha + 2,
-#                 (5 / 18) * log_safe(4 * alpha - 15) + 8)
-#   return x
-
-
-# def inv_partition_spline_curve(x):
-#   """The inverse of partition_spline_curve()."""
-#   exp_safe = lambda z: jnp.exp(jnp.minimum(z, 87.5))
-#   alpha = jnp.where(
-#       x < 8,
-#       0.5 * x + jnp.where(x <= 4, 1.25 - jnp.sqrt(1.5625 - x + .25 * x**2),
-#                           -1.25 + jnp.sqrt(9.5625 - 3 * x + .25 * x**2)),
-#       3.75 + 0.25 * exp_safe(x * 3.6 - 28.8))
-#   return alpha
-
-
-# class Distribution(object):
-#   """A wrapper class around the distribution."""
-
-#   def __init__(self):
-#     """Initialize the distribution.
-
-#     Load the values, tangents, and x-coordinate scaling of a spline that
-#     approximates the partition function. The spline was produced by running
-#     the script in fit_partition_spline.py.
-#     """
-#     with get_resource_as_file(
-#         '/mnt/tier2/project/p200717/kabylda/so3lr_train_qcml/so3lr_v0.1.0/lib/python3.12/site-packages/mlff/utils/partition_spline.npz') as spline_file:
-#       with jnp.load(spline_file, allow_pickle=False) as f:
-#         self._spline_x_scale = f['x_scale']
-#         self._spline_values = f['values']
-#         self._spline_tangents = f['tangents']
-
-#   def log_base_partition_function(self, alpha):
-#     r"""Approximate the distribution's log-partition function with a 1D spline.
-
-#     Because the partition function (Z(\alpha) in the paper) of the distribution
-#     is difficult to model analytically, we approximate it with a (transformed)
-#     cubic hermite spline: Each alpha is pushed through a nonlinearity before
-#     being used to interpolate into a spline, which allows us to use a relatively
-#     small spline to accurately model the log partition function over the range
-#     of all non-negative input values.
-
-#     Args:
-#       alpha: A tensor containing the set of alphas for which we would like an
-#         approximate log partition function. Must be non-negative, as the
-#         partition function is undefined when alpha < 0.
-
-#     Returns:
-#       An approximation of log(Z(alpha)) accurate to within 1e-6
-#     """
-#     # The partition function is undefined when `alpha`< 0.
-#     alpha = jnp.maximum(0, alpha)
-#     # Transform `alpha` to the form expected by the spline.
-#     x = partition_spline_curve(alpha)
-#     # Interpolate into the spline.
-#     return interpolate1d(x * self._spline_x_scale,
-#                                       self._spline_values,
-#                                       self._spline_tangents)
-
-#   def nllfun(self, x, alpha, scale):
-#     r"""Implements the negative log-likelihood (NLL).
-
-#     Specifically, we implement -log(p(x | 0, \alpha, c) of Equation 16 in the
-#     paper as nllfun(x, alpha, shape).
-
-#     Args:
-#       x: The residual for which the NLL is being computed. x can have any shape,
-#         and alpha and scale will be broadcasted to match x's shape if necessary.
-#         Must be a tensorflow tensor or numpy array of floats.
-#       alpha: The shape parameter of the NLL (\alpha in the paper), where more
-#         negative values cause outliers to "cost" more and inliers to "cost"
-#         less. Alpha can be any non-negative value, but the gradient of the NLL
-#         with respect to alpha has singularities at 0 and 2 so you may want to
-#         limit usage to (0, 2) during gradient descent. Must be a tensorflow
-#         tensor or numpy array of floats.
-#       scale: The scale parameter of the loss. When |x| < scale, the NLL is like
-#         that of a (possibly unnormalized) normal distribution, and when |x| >
-#         scale the NLL takes on a different shape according to alpha. Must be a
-#         tensorflow tensor or numpy array of floats.
-
-#     Returns:
-#       The NLLs for each element of x, in the same shape as x. This is returned
-#       as a TensorFlow graph node of floats with the same precision as x.
-#     """
-#     alpha = jnp.maximum(0, alpha)
-#     scale = jnp.maximum(jnp.finfo(jnp.float32).eps, scale)
-#     loss = lossfun(x, alpha, scale)
-#     return loss + jnp.log(scale) + self.log_base_partition_function(alpha)
-
-#   def draw_samples(self, rng, alpha, scale):
-#     r"""Draw samples from the robust distribution.
-
-#     This function implements Algorithm 1 the paper. This code is written to
-#     allow for sampling from a set of different distributions, each parametrized
-#     by its own alpha and scale values, as opposed to the more standard approach
-#     of drawing N samples from the same distribution. This is done by repeatedly
-#     performing N instances of rejection sampling for each of the N distributions
-#     until at least one proposal for each of the N distributions has been
-#     accepted. All samples assume a zero mean --- to get non-zero mean samples,
-#     just add each mean to each sample.
-
-#     Args:
-#       rng: A JAX pseudo random number generated, from random.PRNG().
-#       alpha: A tensor where each element is the shape parameter of that
-#         element's distribution. Must be > 0.
-#       scale: A tensor where each element is the scale parameter of that
-#         element's distribution. Must be >=0 and the same shape as `alpha`.
-
-#     Returns:
-#       A tensor with the same shape as `alpha` and `scale` where each element is
-#       a sample drawn from the zero-mean distribution specified for that element
-#       by `alpha` and `scale`.
-#     """
-#     assert jnp.all(scale > 0)
-#     assert jnp.all(alpha >= 0)
-#     assert jnp.all(jnp.array(alpha.shape) == jnp.array(scale.shape))
-#     shape = alpha.shape
-
-#     samples = jnp.zeros(shape)
-#     accepted = jnp.zeros(shape, dtype=bool)
-
-#     # Rejection sampling.
-#     while not jnp.all(accepted):
-
-#       # The sqrt(2) scaling of the Cauchy distribution corrects for our
-#       # differing conventions for standardization.
-#       rng, key = random.split(rng)
-#       cauchy_sample = random.cauchy(key, shape=shape) * jnp.sqrt(2)
-
-#       # Compute the likelihood of each sample under its target distribution.
-#       nll = self.nllfun(cauchy_sample, alpha, 1)
-
-#       # Bound the NLL. We don't use the approximate loss as it may cause
-#       # unpredictable behavior in the context of sampling.
-#       nll_bound = (
-#           lossfun(cauchy_sample, 0, 1) +
-#           self.log_base_partition_function(alpha))
-
-#       # Draw N samples from a uniform distribution, and use each uniform
-#       # sample to decide whether or not to accept each proposal sample.
-#       rng, key = random.split(rng)
-#       uniform_sample = random.uniform(key, shape=shape)
-#       accept = uniform_sample <= jnp.exp(nll_bound - nll)
-
-#       # If a sample is accepted, replace its element in `samples` with the
-#       # proposal sample, and set its bit in `accepted` to True.
-#       samples = jnp.where(accept, cauchy_sample, samples)
-#       accepted = accept | accepted
-
-#     # Because our distribution is a location-scale family, we sample from
-#     # p(x | 0, \alpha, 1) and then scale each sample by `scale`.
-#     samples *= scale
-
-#     return samples
 
 # Initialize the distribution object for adaptive robust loss
 ROBUST_LOSS_DIST = robust_loss_dist.Distribution()
-# ROBUST_LOSS_DIST = Distribution()
 
 def print_metrics(epoch, eval_metrics):
     formatted_output = f"{epoch}: "
@@ -385,11 +41,24 @@ def graph_mse_loss(y, y_label, batch_segments, graph_mask, scale, use_robust_los
         graph_mask, [y_label.ndim - 1 - o for o in range(0, y_label.ndim - 1)]
     )
     denominator = full_mask.sum().astype(y.dtype)
+
+    # jax.debug.print("y_label_graph: {}", y_label)
+    # jax.debug.print("y_graph: {}", y)
     
     if use_robust_loss:
         # Adaptive robust loss
         diff = jnp.where(full_mask, y - y_label, 0).reshape(-1)
+
+        # # Compute adaptive scale
+        # mean_abs_diff = jnp.sum(jnp.abs(diff)) / jnp.maximum(denominator, 1)
+        # robust_scale = jnp.maximum(mean_abs_diff * 10, 1e-6)
+        # jax.debug.print("robust_scale_graph: {}", robust_scale)
+        # jax.debug.print("mean_abs_diff_graph: {}", mean_abs_diff)
+
+        # loss = jnp.sum(2 * scale * ROBUST_LOSS_DIST.nllfun(diff, robust_loss_alpha, robust_scale)) / denominator
+        # Compute adaptive scale, use scale of 1.0
         loss = jnp.sum(2 * scale * ROBUST_LOSS_DIST.nllfun(diff, robust_loss_alpha, 1.0)) / denominator
+
     else:
         # Regular L2 loss
         loss = (
@@ -407,6 +76,9 @@ def graph_mse_loss(y, y_label, batch_segments, graph_mask, scale, use_robust_los
 def node_mse_loss(y, y_label, batch_segments, graph_mask, scale, use_robust_loss=False, robust_loss_alpha=1.99):
     assert y.shape == y_label.shape
 
+    # jax.debug.print("y_label_node: {}", y_label)
+    # jax.debug.print("y_node: {}", y)
+
     num_graphs = graph_mask.sum().astype(y.dtype)  # ()
 
     if use_robust_loss:
@@ -419,7 +91,15 @@ def node_mse_loss(y, y_label, batch_segments, graph_mask, scale, use_robust_loss
             placeholder=0.
         )
         
+        # # Compute adaptive scale
+        # valid_count = (~jnp.isnan(y_label)).sum()
+        # mean_abs_diff = jnp.sum(jnp.abs(masked_diff)) / jnp.maximum(valid_count, 1)
+        # robust_scale = jnp.maximum(mean_abs_diff * 10, 1e-6)
+        # jax.debug.print("robust_scale_node: {}", robust_scale)
+        # jax.debug.print("mean_abs_diff_node: {}", mean_abs_diff)
+        
         squared = gradient_utils.safe_mask(
+            # fn=lambda u: 2 * ROBUST_LOSS_DIST.nllfun(u, robust_loss_alpha, robust_scale),
             fn=lambda u: 2 * ROBUST_LOSS_DIST.nllfun(u, robust_loss_alpha, 1.0),
             operand=masked_diff,
             mask=~jnp.isnan(y_label),
@@ -606,9 +286,25 @@ def make_loss_fn(obs_fn: Callable, weights: Dict, scales: Dict = None,
         # Make predictions.
         outputs_predict = obs_fn(params, **inputs)
         loss = jnp.zeros(1)
+        loss_mae = jnp.zeros(1)
         metrics = {}
         # Iterate over the targets, calculate loss and multiply with loss weights and scales.
         for target in targets:
+
+            target_mae_fn = property_to_mae[target]
+            _mae = target_mae_fn(
+                y=outputs_predict[target],
+                y_label=outputs_true[target],
+                scale=_scales[target],
+                batch_segments=inputs['batch_segments'],
+                graph_mask=inputs['graph_mask']
+            )
+
+            # metrics.update({f'{target}_mae': _mae})
+            metrics.update({f'{target}_mae': _mae / _scales[target].mean()})
+
+            loss_mae += weights[target] * _mae
+
             target_loss_fn = property_to_loss[target]
             _l = target_loss_fn(
                 y=outputs_predict[target],
@@ -624,20 +320,25 @@ def make_loss_fn(obs_fn: Callable, weights: Dict, scales: Dict = None,
             metrics.update({f'{target}_mse': _l / _scales[target].mean()})
 
         loss = jnp.reshape(loss, ())
+        loss_mae = jnp.reshape(loss_mae, ())
         metrics.update({'loss': loss})
+        metrics.update({'loss_mae': loss_mae})
 
         return loss, metrics
 
     return loss_fn
 
 
-def make_val_fn(obs_fn: Callable, weights: Dict, scales: Dict = None):
+def make_val_fn(obs_fn: Callable, weights: Dict, scales: Dict = None, 
+                use_robust_loss: bool = False, robust_loss_alpha: float = 1.99):
     """Creates a validation function that calculates MAE metrics
     
     Args:
         obs_fn (Callable): Observable function that returns predicted properties
         weights (Dict): Dictionary of property names and their weights
         scales (Dict, optional): Dictionary of scales for each property. Defaults to None.
+        use_robust_loss (bool, optional): Whether to use robust loss for MSE calculation. Defaults to False.
+        robust_loss_alpha (float, optional): Alpha parameter for robust loss. Defaults to 1.99.
     
     Returns:
         Callable: Validation function that returns MAE metrics
@@ -673,7 +374,8 @@ def make_val_fn(obs_fn: Callable, weights: Dict, scales: Dict = None):
                 graph_mask=inputs['graph_mask']
             )
 
-            metrics.update({f'{target}_mae': _mae})
+            # metrics.update({f'{target}_mae': _mae})
+            metrics.update({f'{target}_mae': _mae / _scales[target].mean()})
 
             # Calculate MSE metrics
             target_loss_fn = property_to_loss[target]
@@ -683,7 +385,8 @@ def make_val_fn(obs_fn: Callable, weights: Dict, scales: Dict = None):
                 scale=_scales[target],
                 batch_segments=inputs['batch_segments'],
                 graph_mask=inputs['graph_mask'],
-                use_robust_loss=False
+                use_robust_loss=use_robust_loss,
+                robust_loss_alpha=robust_loss_alpha
             )
             metrics.update({f'{target}_mse': _mse / _scales[target].mean()})
 
@@ -824,7 +527,9 @@ def fit(
         training_seed: int = 0,
         model_seed: int = 0,
         use_wandb: bool = True,
-        log_gradient_values: bool = False
+        log_gradient_values: bool = False,
+        use_robust_loss_validation: bool = False,
+        robust_loss_alpha_validation: float = 1.99
 ):
     """
     Fit model.
@@ -853,6 +558,8 @@ def fit(
         model_seed (int): Random seed for model initialization.
         use_wandb (bool): Log statistics to WeightsAndBias. If true, wandb.init() must be called before call to fit().
         log_gradient_values (bool): Gradient values for each set of weights is logged.
+        use_robust_loss_validation (bool): Whether to use robust loss during validation. Defaults to False.
+        robust_loss_alpha_validation (float): Alpha parameter for robust loss during validation. Defaults to 1.99.
     Returns:
 
     """
@@ -888,6 +595,19 @@ def fit(
     validation_step_fn = make_validation_step_fn(
         val_fn
     )
+
+
+    # Print all parameter keys and shapes
+    def print_param_shapes(params, prefix=''):
+        if isinstance(params, dict):
+            for key, value in params.items():
+                if isinstance(value, (dict, jnp.ndarray)):
+                    if isinstance(value, jnp.ndarray):
+                        print(f"{prefix}{key}: {value.shape}")
+                    else:
+                        print(f"{prefix}{key}:")
+                        print_param_shapes(value, prefix + '  ')
+
 
     processed_graphs = 0
     processed_nodes = 0
@@ -929,7 +649,75 @@ def fit(
                         )
                         print(f"Loaded parameters from {ckpt_dir}")
                         print(f"Params keys: {params.keys()}")
-                        print('This is fit function')
+                        print("\nParameter shapes:")
+                        print("=" * 50)
+                        print_param_shapes(params)
+                        print("=" * 50)
+                        print('This is fit_from_iterator function')
+                        # Modify parameters to handle theory levels
+                        if 'params' in params and 'observables_0' in params['params']:
+                            num_theory_levels = 16
+                            # Modify energy_offset
+                            if 'energy_offset' in params['params']['observables_0']:
+                                print("\nOriginal energy_offset:")
+                                print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+                                print("Values:", params['params']['observables_0']['energy_offset'])
+                                old_energy_offset = params['params']['observables_0']['energy_offset']
+                                
+                                # Only tile if shape is 1D
+                                if len(old_energy_offset.shape) == 1:
+                                    new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+                                    params['params']['observables_0']['energy_offset'] = new_energy_offset
+                                    print("Applied tiling to energy_offset")
+                                else:
+                                    print("Energy offset already has multiple dimensions, no tiling applied")
+                                
+                                print("\nNew energy_offset:")
+                                print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+                                print("Values:", params['params']['observables_0']['energy_offset'])
+
+                            # Modify atomic_scales
+                            if 'atomic_scales' in params['params']['observables_0']:
+                                print("\nOriginal atomic_scales:")
+                                print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+                                print("Values:", params['params']['observables_0']['atomic_scales'])
+                                old_atomic_scales = params['params']['observables_0']['atomic_scales']
+                                
+                                # Only tile if shape is 1D
+                                if len(old_atomic_scales.shape) == 1:
+                                    new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+                                    params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+                                    print("Applied tiling to atomic_scales")
+                                else:
+                                    print("Atomic scales already has multiple dimensions, no tiling applied")
+                                
+                                print("\nNew atomic_scales:")
+                                print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
+                                print("Values:", params['params']['observables_0']['atomic_scales'])
+
+                            # Modify energy_dense_final
+                            if 'energy_dense_final' in params['params']['observables_0']:
+                                print("\nOriginal energy_dense_final kernel:")
+                                print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+                                print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+                                old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
+                                
+                                # Check the shape to determine if tiling is needed
+                                if old_kernel.shape[1] == 1:
+                                    new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+                                    params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+                                    print("Applied tiling to energy_dense_final kernel")
+                                else:
+                                    print("Energy dense final kernel already has correct output dimension, no tiling applied")
+                                
+                                print("\nNew energy_dense_final kernel:")
+                                print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
+                                print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+
+                            print("\nParameter shapes after modification:")
+                            print("=" * 50)
+                            print_param_shapes(params)
+                            print("=" * 50)
                         step += latest_step
                         
                         print(f'Re-start training from {latest_step}.')
@@ -1043,7 +831,9 @@ def fit_from_iterator(
         training_seed: int = 0,
         model_seed: int = 0,
         use_wandb: bool = True,
-        log_gradient_values: bool = False
+        log_gradient_values: bool = False,
+        use_robust_loss_validation: bool = False,
+        robust_loss_alpha_validation: float = 1.99
 ):
     """
     Fit model.
@@ -1072,6 +862,8 @@ def fit_from_iterator(
         model_seed (int): Random seed for model initialization.
         use_wandb (bool): Log statistics to WeightsAndBias. If true, wandb.init() must be called before call to fit().
         log_gradient_values (bool): Gradient values for each set of weights is logged.
+        use_robust_loss_validation (bool): Whether to use robust loss during validation. Defaults to False.
+        robust_loss_alpha_validation (float): Alpha parameter for robust loss during validation. Defaults to 1.99.
     Returns:
 
     """
@@ -1109,6 +901,17 @@ def fit_from_iterator(
         val_fn
     )
 
+    # Print all parameter keys and shapes
+    def print_param_shapes(params, prefix=''):
+        if isinstance(params, dict):
+            for key, value in params.items():
+                if isinstance(value, (dict, jnp.ndarray)):
+                    if isinstance(value, jnp.ndarray):
+                        print(f"{prefix}{key}: {value.shape}")
+                    else:
+                        print(f"{prefix}{key}:")
+                        print_param_shapes(value, prefix + '  ')
+
     processed_graphs = 0
     processed_nodes = 0
     step = 0
@@ -1138,6 +941,10 @@ def fit_from_iterator(
                         )
                         print(f"Loaded parameters from {ckpt_dir}")
                         print(f"Params keys: {params.keys()}")
+                        print("\nParameter shapes:")
+                        print("=" * 50)
+                        print_param_shapes(params)
+                        print("=" * 50)
                         print('This is fit_from_iterator function')
                         # Modify parameters to handle theory levels
                         if 'params' in params and 'observables_0' in params['params']:
@@ -1148,9 +955,15 @@ def fit_from_iterator(
                                 print("Shape:", params['params']['observables_0']['energy_offset'].shape)
                                 print("Values:", params['params']['observables_0']['energy_offset'])
                                 old_energy_offset = params['params']['observables_0']['energy_offset']
-                                # Create new energy_offset with shape (119, 3) by copying the old values
-                                new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
-                                params['params']['observables_0']['energy_offset'] = new_energy_offset
+                                
+                                # Only tile if shape is 1D
+                                if len(old_energy_offset.shape) == 1:
+                                    new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+                                    params['params']['observables_0']['energy_offset'] = new_energy_offset
+                                    print("Applied tiling to energy_offset")
+                                else:
+                                    print("Energy offset already has multiple dimensions, no tiling applied")
+                                
                                 print("\nNew energy_offset:")
                                 print("Shape:", params['params']['observables_0']['energy_offset'].shape)
                                 print("Values:", params['params']['observables_0']['energy_offset'])
@@ -1161,9 +974,15 @@ def fit_from_iterator(
                                 print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
                                 print("Values:", params['params']['observables_0']['atomic_scales'])
                                 old_atomic_scales = params['params']['observables_0']['atomic_scales']
-                                # Create new atomic_scales with shape (119, 3) by copying the old values
-                                new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
-                                params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+                                
+                                # Only tile if shape is 1D
+                                if len(old_atomic_scales.shape) == 1:
+                                    new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+                                    params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+                                    print("Applied tiling to atomic_scales")
+                                else:
+                                    print("Atomic scales already has multiple dimensions, no tiling applied")
+                                
                                 print("\nNew atomic_scales:")
                                 print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
                                 print("Values:", params['params']['observables_0']['atomic_scales'])
@@ -1174,12 +993,23 @@ def fit_from_iterator(
                                 print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
                                 print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
                                 old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
-                                # Create new kernel with shape (128, 3) by copying the old values
-                                new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
-                                params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+                                
+                                # Check the shape to determine if tiling is needed
+                                if old_kernel.shape[1] == 1:
+                                    new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+                                    params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+                                    print("Applied tiling to energy_dense_final kernel")
+                                else:
+                                    print("Energy dense final kernel already has correct output dimension, no tiling applied")
+                                
                                 print("\nNew energy_dense_final kernel:")
                                 print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
                                 print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+
+                            print("\nParameter shapes after modification:")
+                            print("=" * 50)
+                            print_param_shapes(params)
+                            print("=" * 50)
 
                         step += latest_step
                         print(f'Re-start training from {latest_step}.')
