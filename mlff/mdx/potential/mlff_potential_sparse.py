@@ -99,6 +99,28 @@ def load_model_from_workdir(
             f'{model=} is not a valid model.'
         )
 
+    if 'energy_offset' in params['params']['observables_0']:
+        # Change shapes to allow for multiple theory levels, only needed for https://github.com/kabylda/mlff/tree/v1.0-tfds version
+        num_theory_levels=16
+        old_energy_offset = params['params']['observables_0']['energy_offset']
+        if len(old_energy_offset.shape) == 1:
+            print("\nOriginal energy_offset:")
+            print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
+            params['params']['observables_0']['energy_offset'] = new_energy_offset
+
+            old_atomic_scales = params['params']['observables_0']['atomic_scales']
+            new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
+            params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+
+            old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
+            new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
+            params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+
+            print("\nNew energy_offset:")
+            print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            print("Values:", params['params']['observables_0']['energy_offset'])
+
     return net, params
 
 
@@ -217,6 +239,7 @@ class MLFFPotentialSparse(MachineLearningPotential):
                 'total_charge': graph.total_charge,
                 'num_unpaired_electrons': graph.num_unpaired_electrons,
                 'cell': getattr(graph, 'cell', None),
+                'theory_mask': graph.theory_mask
             }
             if long_range_bool is True:
                 x_lr = {

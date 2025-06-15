@@ -47,6 +47,7 @@ def init_itp_net(
         dispersion_energy_cutoff_lr_damping: Optional[float] = None,
         dispersion_energy_scale: float = 1.0,
         zbl_repulsion_bool: bool = False,
+        use_final_bias_bool: bool = True,
         neighborlist_format_lr: str = 'sparse'  # or 'ordered_sparse'
 ):
     embedding_modules = make_embedding_modules(
@@ -143,7 +144,8 @@ def init_itp_net(
         dispersion_energy=dispersion_energy,
         dispersion_energy_bool=dispersion_energy_bool,
         zbl_repulsion=zbl_repulsion,
-        zbl_repulsion_bool=zbl_repulsion_bool
+        zbl_repulsion_bool=zbl_repulsion_bool,
+        use_final_bias_bool=use_final_bias_bool
     )
 
     return StackNetSparse(
