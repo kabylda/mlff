@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from ml_collections import config_dict
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Sequence
 
 from ..config import from_config
 from .checkpoint_utils import load_params_from_workdir
@@ -22,6 +22,7 @@ def load_model_from_workdir(
         workdir: str,
         model='so3krates',
         long_range_kwargs: Dict[str, Any] = None,
+        output_intermediate_quantities: Optional[Sequence[str]] = None,
         from_file: bool = False
 ):
     """
@@ -37,6 +38,7 @@ def load_model_from_workdir(
             like `cutoff_lr = np.inf`, i.e. infinite long-range cutoff. Neighborlist format can be `sparse` or
             `ordered_sparse`. `dispersion_energy_cutoff_lr_damping` specifies where to start the damping for the
             dispersion interactions. For `dispersion_energy_cutoff_lr_damping = 2.` damping starts at `lr_cutoff - 2.`.
+        output_intermediate_quantities (Optional[Sequence[str]]): If not None, the model will return intermediate quantities for the keys given in the sequence.
         from_file (bool): Load parameters from file not from checkpoint directory.
 
     Returns:
@@ -98,7 +100,10 @@ def load_model_from_workdir(
         )
 
     if model == 'so3krates':
-        net = from_config.make_so3krates_sparse_from_config(cfg)
+        net = from_config.make_so3krates_sparse_from_config(
+            cfg,
+            output_intermediate_quantities=output_intermediate_quantities
+        )
     elif model == 'itp_net':
         net = from_config.make_itp_net_from_config(cfg)
     else:

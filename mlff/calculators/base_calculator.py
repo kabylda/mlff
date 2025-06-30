@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 
 from functools import partial
-from typing import Optional, Dict
+from typing import Optional, Dict, Sequence
 
 from ..utils import calculator_utils
 
@@ -15,6 +15,7 @@ def make_base_calculator(
         calculate_forces=True,
         input_convention: str = 'positions',  # 'displacements'
         output_convention: str = 'per_structure',  # 'per_atom'
+        output_intermediate_quantities: Optional[Sequence[str]] = None,
         from_file: bool = False,
 ):
     """
@@ -37,6 +38,7 @@ def make_base_calculator(
         output_convention (str): Output convention. Can be either `per_structure` or `per_atom`. Some properties, i.e.
             the energy are obtained as U = sum_i U_i, where U_i are atomic energies. For this properties, `per_atom` will
             return U_i whereas `per_structure` will return U.
+        output_intermediate_quantities (Optional[Sequence[str]]): If not None, the model will return intermediate quantities for the keys given in the sequence.
         from_file (bool): Load parameters from file not from checkpoint directory.
 
     Returns:
@@ -60,7 +62,8 @@ def make_base_calculator(
         workdir=workdir,
         model=model,
         long_range_kwargs=long_range_kwargs,
-        from_file=from_file
+        output_intermediate_quantities=output_intermediate_quantities,
+        from_file=from_file,
     )
 
     net.reset_input_convention(

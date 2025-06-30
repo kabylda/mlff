@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import logging
-from typing import Any, Callable, Type, Dict
+from typing import Any, Callable, Type, Dict, Sequence, Optional
 from flax import struct
 from mlff.utils import Graph 
 from mlff.mdx.potential.machine_learning_potential import MachineLearningPotential
@@ -26,7 +26,8 @@ def load_model_from_workdir(
         workdir: str,
         model='so3krates',
         long_range_kwargs: Dict[str, Any] = None,
-        from_file: bool = False
+        from_file: bool = False,
+        output_intermediate_quantities: Optional[Sequence[str]]= None
 ):
     cfg = load_hyperparameters(workdir)
 
@@ -52,6 +53,9 @@ def load_model_from_workdir(
 
         cfg.model.cutoff_lr = cutoff_lr
         cfg.neighborlist_format_lr = neighborlist_format
+
+        cfg.electrostatic_energy_kspace_do_ewald_bool = long_range_kwargs.get('coulomb_kspace_do_ewald', False)
+        cfg.electrostatic_energy_kspace_interp_nodes = int(long_range_kwargs.get('coulomb_kspace_interp_nodes', 4))
 
         if dispersion_energy_bool is True:
             dispersion_energy_cutoff_lr_damping = long_range_kwargs['dispersion_energy_cutoff_lr_damping']
@@ -91,7 +95,10 @@ def load_model_from_workdir(
         params = mngr_state.get('params')
 
     if model == 'so3krates':
-        net = from_config.make_so3krates_sparse_from_config(cfg)
+        net = from_config.make_so3krates_sparse_from_config(
+            cfg,
+            output_intermediate_quantities=output_intermediate_quantities
+        )
     elif model == 'itp_net':
         net = from_config.make_itp_net_from_config(cfg)
     else:
@@ -133,7 +140,7 @@ class MLFFPotentialSparse(MachineLearningPotential):
     long_range_cutoff: float = struct.field(pytree_node=False)
 
     potential_fn: Callable[[Graph, bool], jnp.ndarray] = struct.field(pytree_node=False)
-    dtype: Type = struct.field(pytree_node=False)  # TODO: remove and determine based on dtype of atomsx
+    dtype: Type = struct.field(pytree_node=False)
 
     @classmethod
     def create_from_ckpt_dir(
@@ -144,6 +151,7 @@ class MLFFPotentialSparse(MachineLearningPotential):
             long_range_kwargs: Dict[str, Any] = None,
             dtype=jnp.float32,
             model: str = 'so3krates',
+            output_intermediate_quantities: Optional[Sequence[str]] = None
     ):
         logging.warning(
             '`create_from_ckpt_dir` is deprecated and replaced by `create_from_workdir`, please use this method in '
@@ -156,6 +164,7 @@ class MLFFPotentialSparse(MachineLearningPotential):
             long_range_kwargs,
             dtype,
             model,
+            output_intermediate_quantities
         )
 
     @classmethod
@@ -167,6 +176,7 @@ class MLFFPotentialSparse(MachineLearningPotential):
             long_range_kwargs: Dict[str, Any] = None,
             dtype=jnp.float32,
             model: str = 'so3krates',
+            output_intermediate_quantities: Optional[Sequence[str]] = None
     ):
         """
 
@@ -196,7 +206,8 @@ class MLFFPotentialSparse(MachineLearningPotential):
             workdir=workdir,
             from_file=from_file,
             model=model,
-            long_range_kwargs=long_range_kwargs
+            long_range_kwargs=long_range_kwargs,
+            output_intermediate_quantities=output_intermediate_quantities
         )
 
         cfg = load_hyperparameters(workdir=workdir)
@@ -239,7 +250,9 @@ class MLFFPotentialSparse(MachineLearningPotential):
                 'total_charge': graph.total_charge,
                 'num_unpaired_electrons': graph.num_unpaired_electrons,
                 'cell': getattr(graph, 'cell', None),
-                'theory_mask': graph.theory_mask
+                'theory_mask': graph.theory_mask,
+                'k_grid': getattr(graph, 'k_grid', None),
+                'k_smearing': getattr(graph, 'k_smearing', None),
             }
             if long_range_bool is True:
                 x_lr = {

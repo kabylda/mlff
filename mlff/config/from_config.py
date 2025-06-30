@@ -9,7 +9,7 @@ from mlff.nn.stacknet.observable_function_sparse import get_energy_and_force_fn_
 from ml_collections import config_dict
 import numpy as np
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Optional
 import yaml
 import logging
 import os
@@ -28,7 +28,8 @@ logging.mlff = partial(logging.log, logging.MLFF)
 
 def make_so3krates_sparse_from_config(
         config: config_dict.ConfigDict = None,
-        return_representations_bool: bool = False
+        return_representations_bool: bool = False,
+        output_intermediate_quantities: Optional[Sequence[str]] = None
 ):
     """Make a SO3krates model from a config.
 
@@ -70,6 +71,8 @@ def make_so3krates_sparse_from_config(
         energy_learn_atomic_type_scales=model_config.energy_learn_atomic_type_scales,
         energy_learn_atomic_type_shifts=model_config.energy_learn_atomic_type_shifts,
         electrostatic_energy_bool=model_config.electrostatic_energy_bool,
+        electrostatic_energy_kspace_do_ewald_bool = config.electrostatic_energy_kspace_do_ewald_bool,
+        electrostatic_energy_kspace_interp_nodes = config.electrostatic_energy_kspace_interp_nodes,
         electrostatic_energy_scale=model_config.electrostatic_energy_scale,
         dispersion_energy_bool=model_config.dispersion_energy_bool,
         dispersion_energy_cutoff_lr_damping=model_config.dispersion_energy_cutoff_lr_damping,
@@ -78,6 +81,7 @@ def make_so3krates_sparse_from_config(
         zbl_repulsion_bool=model_config.zbl_repulsion_bool,
         use_final_bias_bool=model_config.get('use_final_bias_bool', True),
         neighborlist_format_lr=config.neighborlist_format_lr,
+        output_intermediate_quantities=output_intermediate_quantities,
     )
 
 

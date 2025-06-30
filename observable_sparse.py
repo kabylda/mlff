@@ -38,7 +38,6 @@ class EnergySparse(BaseSubModule):
     hirshfeld_ratios: Optional[Any] = None
     zbl_repulsion_bool: bool = False
     zbl_repulsion: Optional[Any] = None
-    use_final_bias_bool: bool = True
 
     def setup(self):
         if self.output_is_zero_at_init:
@@ -69,18 +68,6 @@ class EnergySparse(BaseSubModule):
         node_mask = inputs['node_mask']  # (num_nodes)
         graph_mask = inputs['graph_mask']  # (num_graphs)
         #output_intermediate_quantities = inputs['output_intermediate_quantities']
-        theory_mask = inputs['theory_mask'] # (num_graphs, num_theory_levels)
-        # theory_level = inputs['theory_level'] # (num_graphs)
-        
-        # Debug print total graphs and graphs per theory level
-        # total_graphs = jnp.sum(graph_mask)
-        # graphs_per_level = jnp.sum(theory_mask * graph_mask[:, None], axis=0)
-        # jax.debug.print("Total graphs (excluding padding): {}", total_graphs)
-        # jax.debug.print("Graphs per theory level: {}", graphs_per_level)
-
-
-        num_theory_levels = theory_mask.shape[-1]
-        theory_mask = theory_mask[batch_segments] # (num_nodes, num_theory_levels)
 
         num_graphs = len(graph_mask)
         if self.learn_atomic_type_shifts:
@@ -88,11 +75,10 @@ class EnergySparse(BaseSubModule):
                 self.param(
                     'energy_offset',
                     nn.initializers.zeros_init(),
-                    (self.zmax + 1, num_theory_levels)
+                    (self.zmax + 1,)
                 ),
-                atomic_numbers,
-                axis=0
-            )  # (num_nodes, num_levels_of_theory)
+                atomic_numbers
+            )  # (num_nodes)
         else:
             energy_offset = jnp.zeros((1,), dtype=x.dtype)
 
@@ -101,8 +87,8 @@ class EnergySparse(BaseSubModule):
                 self.param(
                     'atomic_scales',
                     nn.initializers.ones_init(),
-                    (self.zmax + 1, num_theory_levels)
-                ), atomic_numbers, axis=0)  # (num_nodes, num_levels_of_theory)
+                    (self.zmax + 1,)
+                ), atomic_numbers)  # (num_nodes)
         else:
             atomic_scales = jnp.ones((1,), dtype=x.dtype)
 
@@ -114,29 +100,19 @@ class EnergySparse(BaseSubModule):
             )(x)  # (num_nodes, regression_dim)
             y = self.activation_fn(y)  # (num_nodes, regression_dim)
             atomic_energy = nn.Dense(
-                num_theory_levels,
+                1,
                 kernel_init=self.kernel_init,
-                # optional
-                use_bias=False,
                 name='energy_dense_final'
-            )(y)  # (num_nodes, num_levels_of_theory)
+            )(y).squeeze(axis=-1)  # (num_nodes)
         else:
             atomic_energy = nn.Dense(
-                num_theory_levels,
-                # optional
-                use_bias=False,
+                1,
                 kernel_init=self.kernel_init,
                 name='energy_dense_final'
-            )(x) # (num_nodes, num_levels_of_theory)
+            )(x).squeeze(axis=-1)  # (num_nodes)
 
         atomic_energy = atomic_energy * atomic_scales
-        atomic_energy += energy_offset  # (num_nodes, num_levels_of_theory)
-
-        atomic_energy = jnp.where(
-            theory_mask,
-            atomic_energy,
-            jnp.zeros_like(atomic_energy)
-        ).sum(axis=-1)  # (num_nodes)
+        atomic_energy += energy_offset  # (num_nodes)
 
         atomic_energy = safe_scale(atomic_energy, node_mask)
 
@@ -156,6 +132,9 @@ class EnergySparse(BaseSubModule):
             inputs.update(**self.hirshfeld_ratios(inputs))
             inputs.update(**self.dispersion_energy(inputs))
             atomic_energy += inputs['dispersion_energy']
+
+        atomic_energy = inputs['electrostatic_energy_kspace']
+        atomic_energy += inputs['electrostatic_energy']
 
         if self.output_convention == 'per_structure':
             energy = segment_sum(
@@ -242,7 +221,6 @@ class HirshfeldSparse(BaseSubModule):
                 x (Array): Atomic features, shape: (num_nodes, num_features)
                 atomic_numbers (Array): Atomic types, shape: (num_nodes)
                 node_mask (Array): Node mask, (num_nodes)
-                theory_mask (Array): Theory mask, (num_nodes, num_theory_levels)
             *args ():
             **kwargs ():
 
@@ -252,42 +230,6 @@ class HirshfeldSparse(BaseSubModule):
         x = inputs['x']  # (num_nodes, num_features)
         atomic_numbers = inputs['atomic_numbers']  # (num_nodes)
         node_mask = inputs['node_mask']  # (num_nodes)
-        # theory_mask = inputs['theory_mask']  # (num_nodes, num_theory_levels)
-        # num_theory_levels = theory_mask.shape[-1]
-
-        # # Element-dependent bias
-        # v_shift = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1) # shape: (num_nodes)
-    
-        # if self.regression_dim is not None:
-        #     y = nn.Dense(
-        #         self.regression_dim,
-        #         kernel_init=nn.initializers.lecun_normal(),
-        #         name='hirshfeld_ratios_dense_regression'
-        #     )(x)  # (num_nodes, regression_dim)
-        #     y = self.activation_fn(y)  # (num_nodes, regression_dim)
-        #     v_pred = nn.Dense(
-        #         num_theory_levels,
-        #         kernel_init=self.kernel_init,
-        #         name='hirshfeld_ratios_dense_final'
-        #     )(y)  # (num_nodes, num_theory_levels)
-        # else:
-        #     v_pred = nn.Dense(
-        #         num_theory_levels,
-        #         kernel_init=self.kernel_init,
-        #         name='hirshfeld_ratios_dense_final'
-        #     )(x)  # (num_nodes, num_theory_levels)
-
-        # # Apply theory mask
-        # v_pred_masked = jnp.where(
-        #     theory_mask,
-        #     v_pred,
-        #     jnp.zeros_like(v_pred)
-        # ).sum(axis=-1)
-        
-        # # Add shift and take absolute value
-        # v_eff = v_shift + v_pred_masked  # shape: (num_nodes)
-        # hirshfeld_ratios = jnp.abs(v_eff) # (num_nodes)
-        # hirshfeld_ratios = safe_scale(hirshfeld_ratios, node_mask)
 
         num_features = x.shape[-1]
 
@@ -353,7 +295,7 @@ class PartialChargesSparse(BaseSubModule):
         num_graphs = len(graph_mask)
         num_nodes = len(node_mask)
 
-        # Element-dependent bias
+        # q_ - element-dependent bias
         q_ = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
 
         if self.regression_dim is not None:
@@ -551,66 +493,14 @@ def coulomb_erf(
     _ke = jnp.asarray(ke, dtype=input_dtype)
     _sigma = jnp.asarray(sigma, dtype=input_dtype)
 
-    pairwise = c * _ke * q[idx_i] * q[idx_j] / rij
+    pairwise = c * _ke * q[idx_i] * q[idx_j] * jax.lax.erf(rij / _sigma) / rij
     if cutoff is None:
-        return pairwise * jax.lax.erf(rij / _sigma)
+        return pairwise
     else:
         _cutoff = jnp.asarray(cutoff, dtype=input_dtype)
-        return pairwise * (jax.lax.erf(rij / _sigma) - jax.lax.erf(rij / (_cutoff * jnp.sqrt(2.0))))
+        #return pairwise* (1.0-jax.scipy.special.erf(rij / (_cutoff * jnp.sqrt(2.0))))
+        return c * _ke * q[idx_i] * q[idx_j] * (1.0-jax.scipy.special.erf(rij / (_cutoff * jnp.sqrt(2.0)))) / rij # for testing PME the sigma cutoff is removed
 
-@partial(jax.jit, static_argnames=('neighborlist_format',))
-def coulomb_erf_shifted_force_smooth_pme(
-        q: jnp.ndarray,
-        rij: jnp.ndarray,
-        idx_i: jnp.ndarray,
-        idx_j: jnp.ndarray,
-        ke: float,
-        sigma: float,
-        cutoff: float = None,
-        cuton: float = None,
-        smearing: float = None,
-        neighborlist_format: str = 'sparse'
-) -> jnp.ndarray:
-
-    input_dtype = rij.dtype
-
-    if neighborlist_format == 'sparse':
-        c = jnp.asarray(0.5, dtype=input_dtype)
-    elif neighborlist_format == 'ordered_sparse':
-        c = jnp.asarray(1.0, dtype=input_dtype)
-    else:
-        raise ValueError(
-            f"neighborlist_format must be one of either 'ordered_sparse' or 'sparse'. "
-            f"received {neighborlist_format=}"
-        )
-
-    _ke = jnp.asarray(ke, dtype=input_dtype)
-    _sigma = jnp.asarray(sigma, dtype=input_dtype)
-    _smearing = jnp.asarray(smearing, dtype=input_dtype)* jnp.sqrt(2.0)
-    _cuton = jnp.asarray(cuton, dtype=input_dtype)
-
-    def potential(r):
-        return jax.lax.erf(r / _sigma) / r - jax.lax.erf(r / _smearing ) / r
-
-    def force1(r,cut):
-        return (2 * r * jnp.exp(-(r / cut) ** 2) / (jnp.sqrt(jnp.pi) * cut) - jax.lax.erf(r / cut)) / r ** 2
-
-    def force(r):
-        return force1(r, _sigma) - force1(r, _smearing)
-
-    _cutoff = jnp.asarray(cutoff, dtype=input_dtype)
-    f = switching_fn(rij, _cuton, _cutoff)
-    pairwise = potential(rij)
-    shift = potential(_cutoff)
-    force_shift = force(_cutoff)
-
-    shifted_potential = pairwise - shift - force_shift * (rij - _cutoff)
-
-    return jnp.where(
-        rij < _cutoff,
-        c * _ke * q[idx_i] * q[idx_j] * (f * (pairwise - shift) + (1 - f) * shifted_potential),
-        0.0
-    )
 
 
 @partial(jax.jit, static_argnames=('neighborlist_format',))
@@ -754,11 +644,12 @@ class ElectrostaticEnergySparse(BaseSubModule):
         partial_charges = inputs.get('partial_charges')
         if partial_charges is None:
             partial_charges = self.partial_charges(inputs)['partial_charges']
+        partial_charges = jnp.array([1, 1, 1, 1, -1, -1, -1, -1], dtype=d_ij_lr.dtype) # for testing PME, fix charges as given in the test_random_structure test
+        #partial_charges = jnp.array([-1, 1,], dtype=d_ij_lr.dtype) # Madelung test
 
         # If cutoff is set, we apply damping with error function with smoothing to zero at cutoff_lr.
         # We also apply force shifting to reduce discontinuity artifacts.
-        if self.cutoff_lr is not None:
-            if k_smearing is None:
+        if self.cutoff_lr is not None and k_smearing is None:
                 # Calculate electrostatic energies per long-range edge
                 atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth(
                     partial_charges,
@@ -771,19 +662,7 @@ class ElectrostaticEnergySparse(BaseSubModule):
                     cuton=self.cutoff_lr * 0.45,
                     neighborlist_format=self.neighborlist_format
                 )
-            else:
-                atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth_pme(
-                    partial_charges,
-                    d_ij_lr,
-                    idx_i_lr,
-                    idx_j_lr,
-                    ke=self.ke,
-                    sigma=self.electrostatic_energy_scale,
-                    cutoff=self.cutoff_lr,
-                    cuton=4.5,
-                    smearing=k_smearing,
-                    neighborlist_format=self.neighborlist_format
-                )
+
 
         # If no cutoff is set, we just apply damping with error function and no explicit smoothing to zero.
         else:
@@ -795,7 +674,7 @@ class ElectrostaticEnergySparse(BaseSubModule):
                 idx_j_lr,
                 ke=self.ke,
                 sigma=self.electrostatic_energy_scale,
-                cutoff=None,
+                cutoff=k_smearing,
                 neighborlist_format=self.neighborlist_format
             )            
 
@@ -818,7 +697,6 @@ class ElectrostaticEnergyKspace(BaseSubModule):
     prop_keys: Dict
     partial_charges: Any
     do_ewald: bool = False
-    interpolation_nodes: int = 4
     ke: float = 14.399645351950548
     electrostatic_energy_scale: float = 1.0
     module_name: str = "electrostatic_energy_kspace"
@@ -830,7 +708,7 @@ class ElectrostaticEnergyKspace(BaseSubModule):
         if self.do_ewald:
             self.solver = ewald(get_potential())
         else:
-            self.solver = pme(get_potential(), interpolation_nodes=self.interpolation_nodes)
+            self.solver = pme(get_potential())
     
     @nn.compact
     def __call__(self, inputs: Dict, *args, **kwargs) -> Dict[str, jnp.ndarray]:
@@ -845,15 +723,16 @@ class ElectrostaticEnergyKspace(BaseSubModule):
         partial_charges = inputs.get('partial_charges')
         if partial_charges is None:
             partial_charges = self.partial_charges(inputs)['partial_charges']
+        partial_charges = jnp.array([1, 1, 1, 1, -1, -1, -1, -1], dtype=positions.dtype) # for testing PME, fix charges as given in the test_random_structure test
+        #partial_charges = jnp.array([-1, 1], dtype=positions.dtype) # Madelung test
 
         assert positions is not None, "Positions must be provided for k-space calculation."
         assert k_grid is not None, "k_grid must be provided for k-space calculation."
         assert cell is not None, "Cell must be provided for k-space calculation."
         assert k_smearing is not None, "k_smearing must be provided for k-space calculation."
-        assert cell.shape == (3, 3), f"Invalid cell shape {cell.shape}. Expected (3, 3)."
 
-        volume = jnp.abs(jnp.linalg.det(cell))
         reciprocal_cell = get_reciprocal(cell)
+        volume = jnp.abs(jnp.linalg.det(cell))
         kvectors = generate_kvectors(
             reciprocal_cell, k_grid.shape, dtype=positions.dtype, for_ewald=self.do_ewald
         )

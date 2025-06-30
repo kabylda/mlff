@@ -5,7 +5,7 @@ import logging
 
 from collections import namedtuple
 from functools import partial, partialmethod
-from typing import Any
+from typing import Any, Optional, Sequence
 
 from ase.calculators.calculator import Calculator
 
@@ -88,7 +88,9 @@ class mlffCalculatorSparse(Calculator):
             dtype: np.dtype = np.float64,
             model: str = 'so3krates',
             has_aux: bool = False,
-            from_file: bool = False
+            from_file: bool = False,
+            output_intermediate_quantities: Optional[Sequence[str]] = None,
+            **kwargs
     ):
 
         mlff_potential = MLFFPotentialSparse.create_from_ckpt_dir(
@@ -98,10 +100,12 @@ class mlffCalculatorSparse(Calculator):
                 cutoff_lr=lr_cutoff,
                 dispersion_energy_cutoff_lr_damping=dispersion_energy_cutoff_lr_damping,
                 neighborlist_format_lr='sparse',  # ASECalculator has sparse format.
+                **kwargs
             ),
             dtype=dtype,
             model=model,
-            from_file=from_file
+            from_file=from_file,
+            output_intermediate_quantities=output_intermediate_quantities
         )
 
         return cls(potential=mlff_potential,
@@ -136,8 +140,8 @@ class mlffCalculatorSparse(Calculator):
         if calculate_stress:
             def energy_fn(system, strain: jnp.ndarray, neighbors):
                 system = strain_system(system, strain)
-                graph = system_to_graph(system, neighbors, pme=False)
-
+                graph = system_to_graph(system, neighbors)
+                
                 out = potential(graph, has_aux=has_aux)
                 if isinstance(out, tuple):
                     atomic_energy = out[0]
@@ -158,7 +162,7 @@ class mlffCalculatorSparse(Calculator):
                 )(
                     system,
                     strain,
-                    neighbors
+                    neighbors,
                 )
 
                 forces = - grads[0].R
@@ -176,7 +180,7 @@ class mlffCalculatorSparse(Calculator):
 
         else:
             def energy_fn(system, neighbors):
-                graph = system_to_graph(system, neighbors, pme=False)
+                graph = system_to_graph(system, neighbors)
                 out = potential(graph, has_aux=has_aux)
                 if isinstance(out, tuple):
                     if not has_aux:
@@ -197,7 +201,7 @@ class mlffCalculatorSparse(Calculator):
                     has_aux=has_aux
                 )(
                     system,
-                    neighbors
+                    neighbors,
                 )
                 forces = - grads.R
 
