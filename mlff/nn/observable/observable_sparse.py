@@ -377,17 +377,23 @@ class PartialChargesSparse(BaseSubModule):
 
         x_q = safe_scale(x_ + q_, node_mask)
 
-        total_charge_predicted = segment_sum(
-            x_q,
-            segment_ids=batch_segments,
-            num_segments=num_graphs
-        )  # (num_graphs)
-
-        _, number_of_atoms_in_molecule = jnp.unique(batch_segments, return_counts=True, size=num_graphs)
-
-        charge_conservation = (1 / number_of_atoms_in_molecule) * (total_charge - total_charge_predicted)
-        partial_charges = x_q + jnp.repeat(charge_conservation, number_of_atoms_in_molecule,
-                                           total_repeat_length=num_nodes)  # shape: (num_nodes)
+        # If residue_charge/segments is provided, use it for charge conservation per residue/monomer
+        residue_charge = inputs.get('residue_charge')
+        if residue_charge is not None:
+            # Residue-based charge conservation
+            residue_charge = jnp.asarray(residue_charge, dtype=jnp.float32)
+            residue_segments = jnp.pad(
+                jnp.asarray(inputs['residue_segments'], dtype=jnp.int32).at[-1].set(2),
+                (0, num_nodes - len(inputs['residue_segments'])),
+                constant_values=2
+            )
+            batch_segments, total_charge, num_graphs = residue_segments, residue_charge, residue_charge.shape[0]
+        
+        # Unified charge conservation calculation
+        predicted_charge = segment_sum(x_q, segment_ids=batch_segments, num_segments=num_graphs) # (num_graphs)
+        atom_counts = jnp.bincount(batch_segments, length=num_graphs)
+        charge_conservation = jnp.reciprocal(atom_counts) * (total_charge - predicted_charge)
+        partial_charges = x_q + charge_conservation[batch_segments] # (num_nodes)
 
         return dict(partial_charges=partial_charges)
 
