@@ -253,6 +253,8 @@ class MLFFPotentialSparse(MachineLearningPotential):
                 'theory_mask': graph.theory_mask,
                 'k_grid': getattr(graph, 'k_grid', None),
                 'k_smearing': getattr(graph, 'k_smearing', None),
+                'residue_charge': getattr(graph, 'residue_charge', None),
+                'residue_segments': getattr(graph, 'residue_segments', None),
             }
             if long_range_bool is True:
                 x_lr = {

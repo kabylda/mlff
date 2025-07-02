@@ -56,6 +56,8 @@ def graph_to_batch_fn(graph: jraph.GraphsTuple):
         idx_j_lr=graph.idx_j_lr,
         theory_level=graph.globals.get('theory_level'),
         theory_mask=graph.globals.get('theory_mask'),
+        residue_charge=graph.globals.get('residue_charge'),
+        residue_segments=graph.globals.get('residue_segments'),
     )
     batch_info = batch_info_fn(graph)
     batch.update(batch_info)

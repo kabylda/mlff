@@ -47,6 +47,8 @@ def get_observable_fn_sparse(model: StackNetSparse, observable: str = None):
                 theory_mask: jnp.ndarray = None,
                 k_grid: jnp.ndarray = None,
                 k_smearing: jnp.ndarray = None,
+                residue_segments: jnp.ndarray = None,
+                residue_charge: jnp.ndarray = None,
                 **kwargs
         ):
             if batch_segments is None:
@@ -75,7 +77,9 @@ def get_observable_fn_sparse(model: StackNetSparse, observable: str = None):
                 idx_j_lr=idx_j_lr,
                 theory_mask=theory_mask,
                 k_grid = k_grid,
-                k_smearing = k_smearing
+                k_smearing = k_smearing,
+                residue_segments=residue_segments,
+                residue_charge=residue_charge,
             )
             return model.apply(params, inputs)
     else:
@@ -99,6 +103,8 @@ def get_observable_fn_sparse(model: StackNetSparse, observable: str = None):
                 theory_mask: jnp.ndarray = None,
                 k_grid: jnp.ndarray = None,
                 k_smearing: jnp.ndarray = None,
+                residue_segments: jnp.ndarray = None,
+                residue_charge: jnp.ndarray = None,
                 **kwargs
         ):
             if batch_segments is None:
@@ -127,7 +133,9 @@ def get_observable_fn_sparse(model: StackNetSparse, observable: str = None):
                 idx_j_lr=idx_j_lr,
                 theory_mask=theory_mask,
                 k_grid = k_grid,
-                k_smearing = k_smearing
+                k_smearing = k_smearing,
+                residue_segments=residue_segments,
+                residue_charge=residue_charge,
             )
             return dict(observable=model.apply(params, inputs)[observable])
 
@@ -153,7 +161,9 @@ def get_energy_and_force_fn_sparse(model: StackNetSparse):
                   idx_j_lr: jnp.ndarray = None,
                   theory_mask: jnp.ndarray = None,
                   k_grid: jnp.ndarray = None,
-                  k_smearing: jnp.ndarray = None
+                  k_smearing: jnp.ndarray = None,
+                  residue_segments: jnp.ndarray = None,
+                  residue_charge: jnp.ndarray = None,
                   ):
         if batch_segments is None:
             assert graph_mask is None
@@ -180,7 +190,9 @@ def get_energy_and_force_fn_sparse(model: StackNetSparse):
                       idx_j_lr=idx_j_lr,
                       theory_mask=theory_mask,
                       k_grid = k_grid,
-                      k_smearing = k_smearing
+                      k_smearing = k_smearing,
+                      residue_segments=residue_segments,
+                      residue_charge=residue_charge,
                       )
 
         energy = model.apply(params, inputs)['energy']  # (num_graphs)
@@ -207,6 +219,8 @@ def get_energy_and_force_fn_sparse(model: StackNetSparse):
             theory_mask: jnp.ndarray = None,
             k_grid: jnp.ndarray = None,
             k_smearing: jnp.ndarray = None,
+            residue_segments: jnp.ndarray = None,
+            residue_charge: jnp.ndarray = None,
             *args,
             **kwargs
     ):
@@ -231,7 +245,9 @@ def get_energy_and_force_fn_sparse(model: StackNetSparse):
                           idx_j_lr,
                           theory_mask,
                           k_grid = k_grid,
-                          k_smearing = k_smearing
+                          k_smearing = k_smearing,
+                          residue_segments=residue_segments,
+                          residue_charge=residue_charge,
                           )
 
         if batch_segments is None:
@@ -259,10 +275,12 @@ def get_energy_and_force_fn_sparse(model: StackNetSparse):
                       idx_j_lr=idx_j_lr,
                       theory_mask=theory_mask,
                       k_grid = k_grid,
-                      k_smearing = k_smearing
+                      k_smearing = k_smearing,
+                      residue_segments=residue_segments,
+                      residue_charge=residue_charge,
                       )
 
-        _, number_of_atoms_in_molecule = jnp.unique(batch_segments, return_counts=True, size=len(graph_mask))
+        # _, number_of_atoms_in_molecule = jnp.unique(batch_segments, return_counts=True, size=len(graph_mask))
 
         dipole_vec = model.apply(params, inputs)['dipole_vec']  # (num_graphs)
         dipole_vec = safe_scale(dipole_vec, graph_mask[:, None])  # (num_graphs)
