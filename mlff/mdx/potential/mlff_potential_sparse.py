@@ -111,8 +111,8 @@ def load_model_from_workdir(
         num_theory_levels=16
         old_energy_offset = params['params']['observables_0']['energy_offset']
         if len(old_energy_offset.shape) == 1:
-            print("\nOriginal energy_offset:")
-            print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            # print("\nOriginal energy_offset:")
+            # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
             new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
             params['params']['observables_0']['energy_offset'] = new_energy_offset
 
@@ -124,9 +124,9 @@ def load_model_from_workdir(
             new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
             params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
 
-            print("\nNew energy_offset:")
-            print("Shape:", params['params']['observables_0']['energy_offset'].shape)
-            print("Values:", params['params']['observables_0']['energy_offset'])
+            # print("\nNew energy_offset:")
+            # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
+            # print("Values:", params['params']['observables_0']['energy_offset'])
 
     return net, params
 

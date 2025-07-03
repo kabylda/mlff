@@ -638,7 +638,7 @@ class ElectrostaticEnergySparse(BaseSubModule):
         idx_i_lr = inputs['idx_i_lr']
         idx_j_lr = inputs['idx_j_lr']
         d_ij_lr = inputs['d_ij_lr']
-        k_smearing = inputs['k_smearing']
+        k_smearing = inputs.get('k_smearing')
 
         # Calculate partial charges
         partial_charges = inputs.get('partial_charges')
