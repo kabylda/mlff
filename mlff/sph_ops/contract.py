@@ -193,10 +193,15 @@ def make_l0_contraction_fn(degrees, dtype=jnp.float32):
     return contraction_fn
 
 
-def load_u_matrix():
+# def load_u_matrix():
 
-    stream = pkg_resources.resource_stream(__name__, 'u_matrix.pickle')
-    return pickle.load(stream)
+#     stream = pkg_resources.resource_stream(__name__, 'u_matrix.pickle')
+#     return pickle.load(stream)
+
+def load_u_matrix():
+    resource_path = files(__name__) / 'u_matrix.pickle'
+    with resource_path.open('rb') as f:
+        return pickle.load(f)
 
 
 def degrees_to_str(x):
