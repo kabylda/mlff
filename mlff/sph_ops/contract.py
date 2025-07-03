@@ -4,7 +4,8 @@ import numpy as np
 
 import flax.linen as nn
 
-import pkg_resources
+# import pkg_resources
+from importlib.resources import files
 import pickle
 import itertools as it
 
@@ -14,11 +15,13 @@ from typing import (Callable, Sequence)
 
 indx_fn = lambda x: int((x+1)**2) if x >= 0 else 0
 
-
+# def load_cgmatrix():
+#     stream = pkg_resources.resource_stream(__name__, 'cgmatrix.npz')
+#     return np.load(stream)['cg']
 def load_cgmatrix():
-    stream = pkg_resources.resource_stream(__name__, 'cgmatrix.npz')
-    return np.load(stream)['cg']
-
+    resource_path = files(__name__) / 'cgmatrix.npz'
+    with resource_path.open('rb') as f:
+        return np.load(f)['cg']
 
 def init_clebsch_gordan_matrix(degrees, l_out_max=None):
     """
