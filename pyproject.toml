@@ -25,10 +25,11 @@ pyyaml = "*"
 pytest = "*"
 h5py = "*"
 ml_collections = "*"
+setuptools = "<81"
 jraph = { git = "https://github.com/kabylda/jraph.git", branch = "master", optional = false }
 jax-md = { git = "https://github.com/kabylda/jax-md.git", branch = "main" , optional = false }
-glp = { git = "https://github.com/kabylda/glp.git", branch = "electrostatics_neighbourlist", optional = false }
-
+glp = { git = "https://github.com/fbruenig/glp.git", branch = "pme", optional = false }
+jax-pme = { git = "https://github.com/lab-cosmo/jax-pme", branch = "main" , optional = false }
 
 [tool.poetry.scripts]
 evaluate = "mlff.cAPI.mlff_eval:evaluate"
