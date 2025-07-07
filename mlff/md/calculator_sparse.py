@@ -71,13 +71,14 @@ def matrix_to_voigt(matrix):
 
 
 class mlffCalculatorSparse(Calculator):
-    implemented_properties = ['energy', 'forces', 'stress', 'free_energy']
+    implemented_properties = ['energy', 'forces', 'stress', 'free_energy', 'hessian']
 
     @classmethod
     def create_from_ckpt_dir(
             cls,
             ckpt_dir: str,
             calculate_stress: bool = False,
+            calculate_hessian: bool = False,
             lr_neighbors_bool: bool = True,
             lr_cutoff: float = 10.,
             dispersion_energy_cutoff_lr_damping: float = 2.,
@@ -110,6 +111,7 @@ class mlffCalculatorSparse(Calculator):
 
         return cls(potential=mlff_potential,
                    calculate_stress=calculate_stress,
+                   calculate_hessian=calculate_hessian,
                    capacity_multiplier=capacity_multiplier,
                    buffer_size_multiplier=buffer_size_multiplier,
                    skin=skin,
@@ -126,6 +128,7 @@ class mlffCalculatorSparse(Calculator):
             buffer_size_multiplier: float,
             skin: float,
             calculate_stress: bool,
+            calculate_hessian: bool,
             dtype: np.dtype,
             has_aux: bool,
             *args,
@@ -136,6 +139,8 @@ class mlffCalculatorSparse(Calculator):
         """
 
         super(mlffCalculatorSparse, self).__init__(*args, **kwargs)
+
+        assert not (calculate_stress and calculate_hessian), "Calculating stress and hessian at the same time is not supported."
 
         if calculate_stress:
             def energy_fn(system, strain: jnp.ndarray, neighbors):
@@ -179,39 +184,74 @@ class mlffCalculatorSparse(Calculator):
                     return {'energy': out, 'forces': forces, 'stress': stress}
 
         else:
-            def energy_fn(system, neighbors):
-                graph = system_to_graph(system, neighbors)
-                out = potential(graph, has_aux=has_aux)
-                if isinstance(out, tuple):
-                    if not has_aux:
-                        raise ValueError
 
-                    atomic_energy = out[0]
-                    aux = out[1]
-                    return atomic_energy.sum(), aux
-                else:
-                    atomic_energy = out
-                    return atomic_energy.sum()
 
-            @jax.jit
-            def calculate_fn(system, neighbors):
-                out, grads = jax.value_and_grad(
-                    energy_fn,
-                    allow_int=True,
-                    has_aux=has_aux
-                )(
-                    system,
-                    neighbors,
-                )
-                forces = - grads.R
+            if calculate_hessian:
 
-                if isinstance(out, tuple):
-                    if not has_aux:
-                        raise ValueError
+                def energy_fn(system, neighbors):
+                    graph = system_to_graph(system, neighbors)
+                    out = potential(graph, has_aux=has_aux)
+                    if isinstance(out, tuple):
+                        if not has_aux:
+                            raise ValueError
 
-                    return {'energy': out[0], 'forces': forces, 'aux': out[1]}
-                else:
-                    return {'energy': out, 'forces': forces}
+                @jax.jit
+                def calculate_fn(system, neighbors):
+                    out, grads = jax.value_and_grad(
+                        energy_fn,
+                        allow_int=True,
+                        has_aux=has_aux
+                    )(
+                        system,
+                        neighbors
+                    )
+                    forces = - grads.R
+
+                    hessian = jax.hessian(energy_fn, allow_int=True, has_aux=has_aux)(system, neighbors)
+
+                    if isinstance(out, tuple):
+                        if not has_aux:
+                            raise ValueError
+
+                        return {'energy': out[0], 'forces': forces, 'hessian': hessian, 'aux': out[1]}
+                    else:
+                        return {'energy': out, 'forces': forces, 'hessian': hessian }
+
+            else:
+
+                def energy_fn(system, neighbors):
+                    graph = system_to_graph(system, neighbors)
+                    out = potential(graph, has_aux=has_aux)
+                    if isinstance(out, tuple):
+                        if not has_aux:
+                            raise ValueError
+
+                        atomic_energy = out[0]
+                        aux = out[1]
+                        return atomic_energy.sum(), aux
+                    else:
+                        atomic_energy = out
+                        return atomic_energy.sum()
+
+                @jax.jit
+                def calculate_fn(system, neighbors):
+                    out, grads = jax.value_and_grad(
+                        energy_fn,
+                        allow_int=True,
+                        has_aux=has_aux
+                    )(
+                        system,
+                        neighbors
+                    )
+                    forces = - grads.R
+
+                    if isinstance(out, tuple):
+                        if not has_aux:
+                            raise ValueError
+
+                        return {'energy': out[0], 'forces': forces, 'aux': out[1]}
+                    else:
+                        return {'energy': out, 'forces': forces}
 
         self.calculate_fn = calculate_fn
         self.neighbors = None
