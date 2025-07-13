@@ -71,7 +71,7 @@ def matrix_to_voigt(matrix):
 
 
 class mlffCalculatorSparse(Calculator):
-    implemented_properties = ['energy', 'forces', 'stress', 'free_energy', 'hessian']
+    implemented_properties = ['energy', 'forces', 'stress', 'free_energy', 'hessian', 'obs_grads']
 
     @classmethod
     def create_from_ckpt_dir(
@@ -79,6 +79,7 @@ class mlffCalculatorSparse(Calculator):
             ckpt_dir: str,
             calculate_stress: bool = False,
             calculate_hessian: bool = False,
+            calculate_obs_grads: bool = False,
             lr_neighbors_bool: bool = True,
             lr_cutoff: float = 10.,
             dispersion_energy_cutoff_lr_damping: float = 2.,
@@ -91,6 +92,7 @@ class mlffCalculatorSparse(Calculator):
             has_aux: bool = False,
             from_file: bool = False,
             output_intermediate_quantities: Optional[Sequence[str]] = None,
+            output_atom_indices: Optional[Sequence[int]] = None,
             **kwargs
     ):
 
@@ -112,13 +114,16 @@ class mlffCalculatorSparse(Calculator):
         return cls(potential=mlff_potential,
                    calculate_stress=calculate_stress,
                    calculate_hessian=calculate_hessian,
+                   calculate_obs_grads=calculate_obs_grads,
                    capacity_multiplier=capacity_multiplier,
                    buffer_size_multiplier=buffer_size_multiplier,
                    skin=skin,
                    lr_neighbors_bool=lr_neighbors_bool,
                    lr_cutoff=lr_cutoff,
                    dtype=dtype,
-                   has_aux=has_aux
+                   has_aux=has_aux,
+                   observables=output_intermediate_quantities,
+                   output_atom_indices=output_atom_indices,
                    )
 
     def __init__(
@@ -129,8 +134,11 @@ class mlffCalculatorSparse(Calculator):
             skin: float,
             calculate_stress: bool,
             calculate_hessian: bool,
+            calculate_obs_grads: bool,
             dtype: np.dtype,
             has_aux: bool,
+            observables: Optional[Sequence[str]] = None,
+            output_atom_indices: Optional[Sequence[int]] = None,
             *args,
             **kwargs
     ):
@@ -141,6 +149,8 @@ class mlffCalculatorSparse(Calculator):
         super(mlffCalculatorSparse, self).__init__(*args, **kwargs)
 
         assert not (calculate_stress and calculate_hessian), "Calculating stress and hessian at the same time is not supported."
+        assert not (calculate_stress and calculate_obs_grads), "Calculating stress and observables gradients at the same time is not supported."
+        assert not (calculate_hessian and calculate_obs_grads), "Calculating hessian and observables gradients at the same time is not supported."
 
         if calculate_stress:
             def energy_fn(system, strain: jnp.ndarray, neighbors):
@@ -183,10 +193,7 @@ class mlffCalculatorSparse(Calculator):
                 else:
                     return {'energy': out, 'forces': forces, 'stress': stress}
 
-        else:
-
-
-            if calculate_hessian:
+        elif calculate_hessian:
 
                 def energy_fn(R, system, neighbors):
                     local_system = System(R, system.Z, system.cell, system.total_charge, system.num_unpaired_electrons, system.k_grid, system.k_smearing)
@@ -226,7 +233,55 @@ class mlffCalculatorSparse(Calculator):
                     else:
                         return {'energy': out, 'forces': forces, 'hessian': hessian }
 
-            else:
+        
+        elif calculate_obs_grads:
+
+            def energy_fn(R, system, neighbors, has_aux=False):
+                local_system = System(R, system.Z, system.cell, system.total_charge, system.num_unpaired_electrons, system.k_grid, system.k_smearing)
+                graph = system_to_graph(local_system, neighbors)
+                out = potential(graph, has_aux=has_aux)
+                if isinstance(out, tuple):
+                    if not has_aux:
+                        raise ValueError
+
+                    atomic_energy = out[0]
+                    aux = out[1]
+                    return atomic_energy.sum(), aux
+                else:
+                    atomic_energy = out
+                    return atomic_energy.sum()
+
+            @partial(jax.jit, static_argnames=('obs_name',))
+            def obs_fn_for_name_and_index(index_position, all_position, system, neighbors, obs_name, index):
+                position = jax.lax.dynamic_update_index_in_dim(
+                    all_position, index_position, index, axis=0
+                )
+                return energy_fn(
+                        position,
+                        system,
+                        neighbors,
+                        has_aux=True
+                    )[1][obs_name][index]
+
+            @partial(jax.jit, static_argnames=('index', 'obs_name',))
+            def obs_value_and_grad_fn( system, neighbors, obs_name, index):
+                return jax.value_and_grad(
+                            obs_fn_for_name_and_index,
+                        )(system.R[index],  system.R, system, neighbors, obs_name, index)
+
+
+            print("Calculating observables gradients")
+            print(f'Observables: {observables}, output_atom_indices: {output_atom_indices}')
+
+            def calculate_fn(system, neighbors):
+                obs_grad_dict = {}
+                for o in observables:
+                    obs_grad_dict[o+'_grad'] = {index: obs_value_and_grad_fn(system, neighbors, o, index) for index in output_atom_indices}
+                
+                return {'energy': None, 'obs_grads': obs_grad_dict}
+
+
+        else:
 
                 def energy_fn(system, neighbors):
                     graph = system_to_graph(system, neighbors)
