@@ -74,6 +74,7 @@ training:
     forces: 0.99  # Loss weight for the forces.
     dipole_vec: 0.01 
     hirshfeld_ratios: 0.01
+    c6_ratios: 0.01 
   model_seed: 0  # Seed used for the initialization of the model parameters.
   training_seed: 0  # Seed used for shuffling the batches during training.
   log_gradient_values: False  # Log the norm of the gradients for each set of weights.

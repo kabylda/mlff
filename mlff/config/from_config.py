@@ -512,63 +512,133 @@ def run_evaluation(
     # Modify parameters to handle theory levels
     if 'params' in params and 'observables_0' in params['params']:
         num_theory_levels = 16 
-        
+
         # Modify energy_offset
         if 'energy_offset' in params['params']['observables_0']:
-            # print("\nOriginal energy_offset:")
-            # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
-            # print("Values:", params['params']['observables_0']['energy_offset'])
             old_energy_offset = params['params']['observables_0']['energy_offset']
             
             # Only tile if shape is 1D
             if len(old_energy_offset.shape) == 1:
                 new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
                 params['params']['observables_0']['energy_offset'] = new_energy_offset
-            #     print("Applied tiling to energy_offset")
-            # else:
-            #     print("Energy offset already has multiple dimensions, no tiling applied")
-            
-            # print("\nNew energy_offset:")
-            # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
-            # print("Values:", params['params']['observables_0']['energy_offset'])
+                print("Applied tiling to energy_offset")
+                print(f"New energy_offset shape: {new_energy_offset.shape}")
+            elif old_energy_offset.shape[1] == 16:
+                # Copy from 3rd level (index 2) to all other levels
+                new_energy_offset = old_energy_offset
+                reference_values = old_energy_offset[:, 2]  # Get 3rd level values
+                for i in range(16):
+                    if i != 2:  # Skip the reference level itself
+                        new_energy_offset = new_energy_offset.at[:, i].set(reference_values)
+                params['params']['observables_0']['energy_offset'] = new_energy_offset
+                print("Copied energy_offset from 3rd level of theory to all other levels")
+                print(f"Energy_offset shape: {new_energy_offset.shape}")
+            else:
+                print("Energy offset already has multiple dimensions, no modification applied")
 
         # Modify atomic_scales
         if 'atomic_scales' in params['params']['observables_0']:
-            # print("\nOriginal atomic_scales:")
-            # print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
-            # print("Values:", params['params']['observables_0']['atomic_scales'])
             old_atomic_scales = params['params']['observables_0']['atomic_scales']
             
             # Only tile if shape is 1D
             if len(old_atomic_scales.shape) == 1:
                 new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
                 params['params']['observables_0']['atomic_scales'] = new_atomic_scales
-            #     print("Applied tiling to atomic_scales")
-            # else:
-            #     print("Atomic scales already has multiple dimensions, no tiling applied")
-            
-            # print("\nNew atomic_scales:")
-            # print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
-            # print("Values:", params['params']['observables_0']['atomic_scales'])
+                print("Applied tiling to atomic_scales")
+                print(f"New atomic_scales shape: {new_atomic_scales.shape}")
+            elif old_atomic_scales.shape[1] == 16:
+                # Copy from 3rd level (index 2) to all other levels
+                new_atomic_scales = old_atomic_scales
+                reference_values = old_atomic_scales[:, 2]  # Get 3rd level values
+                for i in range(16):
+                    if i != 2:  # Skip the reference level itself
+                        new_atomic_scales = new_atomic_scales.at[:, i].set(reference_values)
+                params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+                print("Copied atomic_scales from 3rd level of theory to all other levels")
+                print(f"Atomic_scales shape: {new_atomic_scales.shape}")
+            else:
+                print("Atomic scales already has multiple dimensions, no modification applied")
 
         # Modify energy_dense_final
         if 'energy_dense_final' in params['params']['observables_0']:
-            # print("\nOriginal energy_dense_final kernel:")
-            # print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
-            # print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
             old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
             
             # Check the shape to determine if tiling is needed
             if old_kernel.shape[1] == 1:
                 new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
                 params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
-            #     print("Applied tiling to energy_dense_final kernel")
-            # else:
-            #     print("Energy dense final kernel already has correct output dimension, no tiling applied")
+                print("Applied tiling to energy_dense_final kernel")
+                print(f"New energy_dense_final kernel shape: {new_kernel.shape}")
+            elif old_kernel.shape[1] == 16:
+                # Copy from 3rd level (index 2) to all other levels
+                new_kernel = old_kernel
+                reference_values = old_kernel[:, 2]  # Get 3rd level values
+                for i in range(16):
+                    if i != 2:  # Skip the reference level itself
+                        new_kernel = new_kernel.at[:, i].set(reference_values)
+                params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+                print("Copied energy_dense_final kernel from 3rd level of theory to all other levels")
+                print(f"Energy_dense_final kernel shape: {new_kernel.shape}")
+            else:
+                print("Energy dense final kernel already has correct output dimension, no modification applied")
+
+        # # Create C6 parameters from Hirshfeld parameters - copy observables_2 to observables_3
+        # if 'observables_2' in params['params'] and 'hirshfeld_ratios_dense_regression' in params['params']['observables_2']:
+        #     # Create observables_3 as a complete copy of observables_2
+        #     params['params']['observables_3'] = {}
             
-            # print("\nNew energy_dense_final kernel:")
-            # print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
-            # print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+        #     # Copy all parameters from observables_2 to observables_3
+        #     for key, value in params['params']['observables_2'].items():
+        #         params['params']['observables_3'][key] = value
+            
+        #     # Now create the C6 specific parameters in observables_3
+        #     params['params']['observables_3']['c6_ratios_dense_regression'] = params['params']['observables_2']['hirshfeld_ratios_dense_regression']
+        #     params['params']['observables_3']['c6_ratios_dense_final'] = params['params']['observables_2']['hirshfeld_ratios_dense_final']
+            
+        #     print("Created observables_3 with complete copy of observables_2 parameters")
+        #     print("Created C6 parameters in observables_3 from Hirshfeld parameters")
+        #     print(f"observables_3 contains: {list(params['params']['observables_3'].keys())}")
+
+        # Create C6 parameters from Hirshfeld parameters - initialize observables_3 from scratch
+        if 'observables_2' in params['params'] and 'hirshfeld_ratios_dense_regression' in params['params']['observables_2']:
+            # Create observables_3 and initialize weights from scratch
+            params['params']['observables_3'] = {}
+            
+            # Initialize a random key for parameter initialization
+            init_key = jax.random.PRNGKey(42)  # You can change the seed as needed
+            
+            # Get reference shapes from observables_2 to initialize observables_3 with same shapes
+            obs2_params = params['params']['observables_2']
+            
+            # Initialize c6_ratios_dense_regression with lecun_normal
+            if 'hirshfeld_ratios_dense_regression' in obs2_params:
+                regression_shape = obs2_params['hirshfeld_ratios_dense_regression']['kernel'].shape
+                init_key, subkey = jax.random.split(init_key)
+                params['params']['observables_3']['c6_ratios_dense_regression'] = {
+                    'kernel': jax.nn.initializers.lecun_normal()(subkey, regression_shape),
+                    'bias': jnp.zeros(regression_shape[1:])  # Initialize bias to zeros
+                }
+            
+            # Initialize c6_ratios_dense_final with lecun_normal
+            if 'hirshfeld_ratios_dense_final' in obs2_params:
+                final_shape = obs2_params['hirshfeld_ratios_dense_final']['kernel'].shape
+                init_key, subkey = jax.random.split(init_key)
+                params['params']['observables_3']['c6_ratios_dense_final'] = {
+                    'kernel': jax.nn.initializers.lecun_normal()(subkey, final_shape),
+                    'bias': jnp.zeros(final_shape[1:])  # Initialize bias to zeros
+                }
+            
+            # Initialize Embed_0 and Embed_1 with lecun_normal
+            for embed_name in ['Embed_0', 'Embed_1']:
+                if embed_name in obs2_params:
+                    embed_shape = obs2_params[embed_name]['embedding'].shape
+                    init_key, subkey = jax.random.split(init_key)
+                    params['params']['observables_3'][embed_name] = {
+                        'embedding': jax.nn.initializers.lecun_normal()(subkey, embed_shape)
+                    }
+            
+            print("Created C6 parameters in observables_3 with fresh lecun_normal initialization")
+            print(f"observables_3 contains: {list(params['params']['observables_3'].keys())}")
 
     # print("\nParameter shapes after modification:")
     print("=" * 50)
@@ -650,6 +720,9 @@ def run_fine_tuning(
     elif strategy == 'hirshfeld':
         # Only the Hirshfeld is refined
         trainable_subset_keys = ['observables_2']
+    elif strategy == 'c6_ratios':
+        # Only the C6 ratios are refined
+        trainable_subset_keys = ['observables_3']
     elif strategy == 'last_layer':
         # Only the last MP layer is refined.
         trainable_subset_keys = [f'layers_{config.model.num_layers - 1}']
@@ -726,61 +799,197 @@ def run_fine_tuning(
 
         # Modify energy_offset
         if 'energy_offset' in params['params']['observables_0']:
-            # print("\nOriginal energy_offset:")
-            # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
-            # print("Values:", params['params']['observables_0']['energy_offset'])
             old_energy_offset = params['params']['observables_0']['energy_offset']
             
             # Only tile if shape is 1D
             if len(old_energy_offset.shape) == 1:
                 new_energy_offset = jnp.tile(old_energy_offset[:, None], (1, num_theory_levels))
                 params['params']['observables_0']['energy_offset'] = new_energy_offset
-                # print("Applied tiling to energy_offset")
-            # else:
-            #     print("Energy offset already has multiple dimensions, no tiling applied")
-            
-            # print("\nNew energy_offset:")
-            # print("Shape:", params['params']['observables_0']['energy_offset'].shape)
-            # print("Values:", params['params']['observables_0']['energy_offset'])
+                print("Applied tiling to energy_offset")
+                print(f"New energy_offset shape: {new_energy_offset.shape}")
+            elif old_energy_offset.shape[1] == 16:
+                # Copy from 3rd level (index 2) to all other levels
+                new_energy_offset = old_energy_offset
+                reference_values = old_energy_offset[:, 2]  # Get 3rd level values
+                for i in range(16):
+                    if i != 2:  # Skip the reference level itself
+                        new_energy_offset = new_energy_offset.at[:, i].set(reference_values)
+                params['params']['observables_0']['energy_offset'] = new_energy_offset
+                print("Copied energy_offset from 3rd level of theory to all other levels")
+                print(f"Energy_offset shape: {new_energy_offset.shape}")
+            else:
+                print("Energy offset already has multiple dimensions, no modification applied")
 
         # Modify atomic_scales
         if 'atomic_scales' in params['params']['observables_0']:
-            # print("\nOriginal atomic_scales:")
-            # print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
-            # print("Values:", params['params']['observables_0']['atomic_scales'])
             old_atomic_scales = params['params']['observables_0']['atomic_scales']
             
             # Only tile if shape is 1D
             if len(old_atomic_scales.shape) == 1:
                 new_atomic_scales = jnp.tile(old_atomic_scales[:, None], (1, num_theory_levels))
                 params['params']['observables_0']['atomic_scales'] = new_atomic_scales
-            #     print("Applied tiling to atomic_scales")
-            # else:
-            #     print("Atomic scales already has multiple dimensions, no tiling applied")
-            
-            # print("\nNew atomic_scales:")
-            # print("Shape:", params['params']['observables_0']['atomic_scales'].shape)
-            # print("Values:", params['params']['observables_0']['atomic_scales'])
+                print("Applied tiling to atomic_scales")
+                print(f"New atomic_scales shape: {new_atomic_scales.shape}")
+            elif old_atomic_scales.shape[1] == 16:
+                # Copy from 3rd level (index 2) to all other levels
+                new_atomic_scales = old_atomic_scales
+                reference_values = old_atomic_scales[:, 2]  # Get 3rd level values
+                for i in range(16):
+                    if i != 2:  # Skip the reference level itself
+                        new_atomic_scales = new_atomic_scales.at[:, i].set(reference_values)
+                params['params']['observables_0']['atomic_scales'] = new_atomic_scales
+                print("Copied atomic_scales from 3rd level of theory to all other levels")
+                print(f"Atomic_scales shape: {new_atomic_scales.shape}")
+            else:
+                print("Atomic scales already has multiple dimensions, no modification applied")
 
         # Modify energy_dense_final
         if 'energy_dense_final' in params['params']['observables_0']:
-            # print("\nOriginal energy_dense_final kernel:")
-            # print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
-            # print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
             old_kernel = params['params']['observables_0']['energy_dense_final']['kernel']
             
             # Check the shape to determine if tiling is needed
             if old_kernel.shape[1] == 1:
                 new_kernel = jnp.tile(old_kernel, (1, num_theory_levels))
                 params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
-            #     print("Applied tiling to energy_dense_final kernel")
-            # else:
-            #     print("Energy dense final kernel already has correct output dimension, no tiling applied")
-            
-            # print("\nNew energy_dense_final kernel:")
-            # print("Shape:", params['params']['observables_0']['energy_dense_final']['kernel'].shape)
-            # print("Values:", params['params']['observables_0']['energy_dense_final']['kernel'])
+                print("Applied tiling to energy_dense_final kernel")
+                print(f"New energy_dense_final kernel shape: {new_kernel.shape}")
+            elif old_kernel.shape[1] == 16:
+                # Copy from 3rd level (index 2) to all other levels
+                new_kernel = old_kernel
+                reference_values = old_kernel[:, 2]  # Get 3rd level values
+                for i in range(16):
+                    if i != 2:  # Skip the reference level itself
+                        new_kernel = new_kernel.at[:, i].set(reference_values)
+                params['params']['observables_0']['energy_dense_final']['kernel'] = new_kernel
+                print("Copied energy_dense_final kernel from 3rd level of theory to all other levels")
+                print(f"Energy_dense_final kernel shape: {new_kernel.shape}")
+            else:
+                print("Energy dense final kernel already has correct output dimension, no modification applied")
 
+        # Create C6 parameters from Hirshfeld parameters - initialize observables_3 from scratch
+        if 'observables_2' in params['params'] and 'hirshfeld_ratios_dense_regression' in params['params']['observables_2']:
+            # Create observables_3 and initialize weights from scratch
+            params['params']['observables_3'] = {}
+            
+            # Initialize a random key for parameter initialization
+            init_key = jax.random.PRNGKey(42)  # You can change the seed as needed
+            
+            # Get reference shapes from observables_2 to initialize observables_3 with same shapes
+            obs2_params = params['params']['observables_2']
+            
+            # Initialize c6_ratios_dense_regression with lecun_normal
+            if 'hirshfeld_ratios_dense_regression' in obs2_params:
+                regression_shape = obs2_params['hirshfeld_ratios_dense_regression']['kernel'].shape
+                init_key, subkey = jax.random.split(init_key)
+                params['params']['observables_3']['c6_ratios_dense_regression'] = {
+                    'kernel': jax.nn.initializers.lecun_normal()(subkey, regression_shape),
+                    'bias': jnp.zeros(regression_shape[1:])  # Initialize bias to zeros
+                }
+            
+            # Initialize c6_ratios_dense_final with lecun_normal
+            if 'hirshfeld_ratios_dense_final' in obs2_params:
+                final_shape = obs2_params['hirshfeld_ratios_dense_final']['kernel'].shape
+                init_key, subkey = jax.random.split(init_key)
+                params['params']['observables_3']['c6_ratios_dense_final'] = {
+                    'kernel': jax.nn.initializers.lecun_normal()(subkey, final_shape),
+                    'bias': jnp.zeros(final_shape[1:])  # Initialize bias to zeros
+                }
+            
+            # Initialize Embed_0 and Embed_1 with lecun_normal
+            for embed_name in ['Embed_0', 'Embed_1']:
+                if embed_name in obs2_params:
+                    embed_shape = obs2_params[embed_name]['embedding'].shape
+                    init_key, subkey = jax.random.split(init_key)
+                    params['params']['observables_3'][embed_name] = {
+                        'embedding': jax.nn.initializers.lecun_normal()(subkey, embed_shape)
+                    }
+            
+            print("Created C6 parameters in observables_3 with fresh lecun_normal initialization")
+            print(f"observables_3 contains: {list(params['params']['observables_3'].keys())}")
+
+        # Initialize parameters for both HirshfeldSparse (observables_2) and C6RatiosSparse (observables_3)
+        
+        # Initialize observables_2 (HirshfeldSparse) if it doesn't exist
+        if 'observables_2' not in params['params']:
+            params['params']['observables_2'] = {}
+            
+        # Initialize observables_3 (C6RatiosSparse) if it doesn't exist  
+        if 'observables_3' not in params['params']:
+            params['params']['observables_3'] = {}
+            
+        # Initialize a random key for parameter initialization
+        init_key = jax.random.PRNGKey(42)
+        
+        # Define common shapes based on model architecture
+        # Embedding layer: num_embeddings=100, features=1
+        embed_shape = (100, 1)
+        
+        # Get input feature dimension from existing model parameters
+        # Look for any dense layer to infer input dimension
+        input_dim = None
+        if 'params' in params:
+            for obs_key in ['observables_0', 'observables_1', 'observables_2']:
+                if obs_key in params['params']:
+                    for layer_key, layer_params in params['params'][obs_key].items():
+                        if isinstance(layer_params, dict) and 'kernel' in layer_params:
+                            input_dim = layer_params['kernel'].shape[0]
+                            break
+                    if input_dim is not None:
+                        break
+        
+        # Default input dimension if not found
+        if input_dim is None:
+            input_dim = 128  # Default feature dimension
+            
+        # Default regression dimension
+        regression_dim = int(input_dim)
+
+        # Initialize HirshfeldSparse parameters (observables_2)
+        if 'Embed_0' not in params['params']['observables_2']:
+            init_key, subkey = jax.random.split(init_key)
+            params['params']['observables_2']['Embed_0'] = {
+                'embedding': jax.nn.initializers.lecun_normal()(subkey, embed_shape)
+            }
+            
+        if 'hirshfeld_ratios_dense_regression' not in params['params']['observables_2']:
+            init_key, subkey = jax.random.split(init_key)
+            params['params']['observables_2']['hirshfeld_ratios_dense_regression'] = {
+                'kernel': jax.nn.initializers.lecun_normal()(subkey, (input_dim, regression_dim)),
+                'bias': jnp.zeros(regression_dim)
+            }
+            
+        if 'hirshfeld_ratios_dense_final' not in params['params']['observables_2']:
+            init_key, subkey = jax.random.split(init_key)
+            params['params']['observables_2']['hirshfeld_ratios_dense_final'] = {
+                'kernel': jax.nn.initializers.lecun_normal()(subkey, (regression_dim, 1)),
+                'bias': jnp.zeros(1)
+            }
+        
+        # Initialize C6RatiosSparse parameters (observables_3) 
+        if 'Embed_0' not in params['params']['observables_3']:
+            init_key, subkey = jax.random.split(init_key)
+            params['params']['observables_3']['Embed_0'] = {
+                'embedding': jax.nn.initializers.lecun_normal()(subkey, embed_shape)
+            }
+            
+        if 'c6_ratios_dense_regression' not in params['params']['observables_3']:
+            init_key, subkey = jax.random.split(init_key)
+            params['params']['observables_3']['c6_ratios_dense_regression'] = {
+                'kernel': jax.nn.initializers.lecun_normal()(subkey, (input_dim, regression_dim)),
+                'bias': jnp.zeros(regression_dim)
+            }
+            
+        if 'c6_ratios_dense_final' not in params['params']['observables_3']:
+            init_key, subkey = jax.random.split(init_key)
+            params['params']['observables_3']['c6_ratios_dense_final'] = {
+                'kernel': jax.nn.initializers.lecun_normal()(subkey, (regression_dim, 1)),
+                'bias': jnp.zeros(1)
+            }
+            
+        print("Initialized parameters for HirshfeldSparse (observables_2) and C6RatiosSparse (observables_3)")
+        print(f"observables_2 contains: {list(params['params']['observables_2'].keys())}")
+        print(f"observables_3 contains: {list(params['params']['observables_3'].keys())}")
+        
     # print("\nParameter shapes after modification:")
     print("=" * 50)
     print_param_shapes(params)

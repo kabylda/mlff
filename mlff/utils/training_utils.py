@@ -254,6 +254,7 @@ property_to_mae = {
     'forces': node_mae_loss,
     'dipole_vec': graph_mae_loss,
     'hirshfeld_ratios': node_mae_loss,
+    'c6_ratios': node_mae_loss,
 }
 
 property_to_loss = {
@@ -262,6 +263,7 @@ property_to_loss = {
     'forces': node_mse_loss,
     'dipole_vec': graph_mse_loss,
     'hirshfeld_ratios': node_mse_loss,
+    'c6_ratios': node_mse_loss,
 }
 
 
@@ -914,6 +916,9 @@ def fit_from_iterator(
 
     processed_graphs = 0
     processed_nodes = 0
+    # processed_nodes = np.int64(0)
+#     RuntimeWarning: overflow encountered in scalar add
+#   processed_nodes += batch_max_num_nodes - jraph.get_number_of_padding_with_graphs_nodes(graph_batch_training).
     step = 0
 
     opt_state = None
@@ -926,7 +931,7 @@ def fit_from_iterator(
         for graph_batch_training in training_iterator_loop:
             batch_training = graph_to_batch_fn(graph_batch_training)
             processed_graphs += batch_training['num_of_non_padded_graphs']
-            processed_nodes += batch_max_num_nodes - jraph.get_number_of_padding_with_graphs_nodes(graph_batch_training)
+            processed_nodes += int(batch_max_num_nodes - jraph.get_number_of_padding_with_graphs_nodes(graph_batch_training))
             # Training data is numpy arrays so we now transform them to jax.numpy arrays.
             batch_training = jax.tree_map(jnp.array, batch_training)
 

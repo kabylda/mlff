@@ -54,12 +54,68 @@ def compute_edges_tf(
     return centers, others
 
 
+def standardize_dataset_fields(dataset, expected_fields=None):
+    """Standardize dataset fields to ensure all datasets have the same structure.
+    
+    Args:
+        dataset: TensorFlow dataset to standardize
+        expected_fields: Dictionary of expected field names and their default specs
+        
+    Returns:
+        Dataset with standardized fields
+    """
+    if expected_fields is None:
+        # Define the complete expected structure based on your data
+        expected_fields = {
+            'atomic_numbers': {'dtype': tf.int32, 'shape': (None,)},
+            'charge': {'dtype': tf.int32, 'shape': (1,)},
+            'dipole_vec': {'dtype': tf.float32, 'shape': (3,)},
+            'energy': {'dtype': tf.float32, 'shape': (None,)},
+            'forces': {'dtype': tf.float32, 'shape': (None, 3)},
+            'hirshfeld_ratios': {'dtype': tf.float32, 'shape': (None,)},
+            'c6_ratios': {'dtype': tf.float32, 'shape': (None,)},
+            'multiplicity': {'dtype': tf.int32, 'shape': (1,)},
+            'positions': {'dtype': tf.float32, 'shape': (None, 3)},
+            'stress': {'dtype': tf.float32, 'shape': (6,)},
+            'theory_level': {'dtype': tf.int32, 'shape': (1,)},
+        }
+    
+    def add_missing_fields(sample):
+        """Add missing fields with appropriate default values."""
+        standardized_sample = {}
+        
+        # Copy existing fields
+        for key, value in sample.items():
+            standardized_sample[key] = value
+        
+        # Add missing hirshfeld_ratios field only
+        if 'hirshfeld_ratios' not in sample:
+            # For hirshfeld_ratios, create NaN values with same length as atomic_numbers
+            num_atoms = tf.shape(sample['atomic_numbers'])[0]
+            hirshfeld_ratios_spec = expected_fields['hirshfeld_ratios']
+            dtype = hirshfeld_ratios_spec['dtype']
+            default_value = tf.fill((num_atoms,), tf.constant(float('nan'), dtype=dtype))
+            standardized_sample['hirshfeld_ratios'] = default_value
+
+        if 'c6_ratios' not in sample:
+            # For c6_ratios, create NaN values with same length as atomic_numbers
+            num_atoms = tf.shape(sample['atomic_numbers'])[0]
+            c6_ratios_spec = expected_fields['c6_ratios']
+            dtype = c6_ratios_spec['dtype']
+            default_value = tf.fill((num_atoms,), tf.constant(float('nan'), dtype=dtype))
+            standardized_sample['c6_ratios'] = default_value
+        
+        return standardized_sample
+    
+    return dataset.map(add_missing_fields, num_parallel_calls=tf.data.AUTOTUNE)
+
+
 def create_graph_tuple_tf(
         element,
         cutoff: float,
         calculate_neighbors_lr: bool = False,
         cutoff_lr: Optional[float] = None,
-        max_num_theory_levels: int = 3, #get from the config
+        max_num_theory_levels: int = 16, #get from the config
 ) -> jraph.GraphsTuple:
 
     """Takes a data element and wraps relevant components in a GraphsTuple."""
@@ -84,6 +140,7 @@ def create_graph_tuple_tf(
         nodes_dict['forces'] = element['forces']
     if 'theory_level' in properties:
         theory_level = tf.reshape(element['theory_level'], (1,))
+        #theory_level = tf.reshape(2, (1,))
         globals_dict['theory_level'] = theory_level
         theory_mask = tf.one_hot(theory_level, depth=max_num_theory_levels)  # (1, num_theory_levels)
         globals_dict['theory_mask'] = theory_mask
@@ -93,8 +150,9 @@ def create_graph_tuple_tf(
         globals_dict['theory_level'] = tf.reshape(theory_level, (1,))
         theory_mask = tf.one_hot(theory_level, depth=max_num_theory_levels)
         globals_dict['theory_mask'] = theory_mask
-
-    if 'hirshfeld_ratios' in properties: # and theory_level[0] == 0:  # Only include Hirshfeld ratios for theory level 0.
+#    print(theory_level[0], theory_level[0] ==  0)
+#    Tensor("strided_slice:0", shape=(), dtype=int32) Tensor("Equal:0", shape=(), dtype=bool)
+    if 'hirshfeld_ratios' in properties and theory_level[0] == 0:  # Only include Hirshfeld ratios for theory level 0.
         nodes_dict['hirshfeld_ratios'] = element['hirshfeld_ratios']
     else:
         # Hack to deal with symbolic tensors, since this depends on the number of atoms in the molecule.
@@ -103,6 +161,16 @@ def create_graph_tuple_tf(
             (-1, )
         )
         nodes_dict['hirshfeld_ratios'] = hirshfeld_ratios
+    if 'c6_ratios' in properties and theory_level[0] == 0:  # Only include C6 ratios for theory level 0.
+        nodes_dict['c6_ratios'] = element['c6_ratios']
+    else:
+        # Hack to deal with symbolic tensors, since this depends on the number of atoms in the molecule.
+        c6_ratios = tf.reshape(
+            tf.zeros_like(atomic_numbers, dtype=tf.float32) * tf.constant([np.nan], dtype=tf.float32),
+            (-1, )
+        )
+        nodes_dict['c6_ratios'] = c6_ratios
+
     if 'multiplicity' in properties:
         globals_dict['num_unpaired_electrons'] = tf.reshape(element['multiplicity'], (1,)) - 1
     if 'charge' in properties:
@@ -114,27 +182,28 @@ def create_graph_tuple_tf(
         stress = np.empty((1, 6))
         stress[:] = np.nan
         globals_dict['stress'] = tf.convert_to_tensor(stress, dtype=tf.float32)
-    if 'dipole_vec' in properties:
+    if 'dipole_vec' in properties: # and num_atoms < 100:
         globals_dict['dipole_vec'] = tf.reshape(element['dipole_vec'], (1, 3))
     else:
+        #print('dipole vec nan ', num_atoms)
         dipole_vec = np.empty((1, 3))
         dipole_vec[:] = np.nan
         globals_dict['dipole_vec'] = tf.convert_to_tensor(dipole_vec, dtype=tf.float32)
+    # Conditional dipole_vec reading based on number of atoms
+   #if 'dipole_vec' in properties:
+   #    # Use tf.cond for conditional execution in graph mode
+   #    dipole_vec = tf.cond(
+   #        tf.less(num_atoms, 50),
+   #        lambda: tf.reshape(element['dipole_vec'], (1, 3)),  # Read dipole if < max_atoms_for_dipole
+   #        lambda: tf.constant([[np.nan, np.nan, np.nan]], dtype=tf.float32)  # Set to NaN otherwise
+   #    )
+   #    globals_dict['dipole_vec'] = dipole_vec
+   #else:
+   #    # Default case when dipole_vec is not in properties
+   #    dipole_vec = np.empty((1, 3))
+   #    dipole_vec[:] = np.nan
+   #    globals_dict['dipole_vec'] = tf.convert_to_tensor(dipole_vec, dtype=tf.float32)
 
-    # # Conditional dipole_vec reading based on number of atoms
-    # if 'dipole_vec' in properties:
-    #     # Use tf.cond for conditional execution in graph mode
-    #     dipole_vec = tf.cond(
-    #         tf.less(num_atoms, 50),
-    #         lambda: tf.reshape(element['dipole_vec'], (1, 3)),  # Read dipole if < max_atoms_for_dipole
-    #         lambda: tf.constant([[np.nan, np.nan, np.nan]], dtype=tf.float32)  # Set to NaN otherwise
-    #     )
-    #     globals_dict['dipole_vec'] = dipole_vec
-    # else:
-    #     # Default case when dipole_vec is not in properties
-    #     dipole_vec = np.empty((1, 3))
-    #     dipole_vec[:] = np.nan
-    #     globals_dict['dipole_vec'] = tf.convert_to_tensor(dipole_vec, dtype=tf.float32)
 
     centers, others = compute_edges_tf(
         positions=positions,
@@ -172,7 +241,6 @@ def create_graph_tuple_tf(
         idx_j_lr=others_lr,
         n_pairs=tf.reshape(num_edges_lr, (1,))
     )
-    
 
 @dataclass
 class WorkerConfig:
@@ -356,6 +424,7 @@ class QCMLDataLoaderSparseParallel:
 
         # Prefetch for better performance
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
+
         #TODO: need to add data.transformations.unit_conversion_graph before filtering 
 
         # Create batches
@@ -415,6 +484,9 @@ class QCMLDataLoaderSparseParallel:
                         split = 'validation'
                 
                 dataset = builder.as_dataset(split=split, shuffle_files=True, read_config=read_config)
+
+                # Standardize dataset fields to ensure compatibility
+                dataset = standardize_dataset_fields(dataset)
 
                 if config.mode == 'train':
                     dataset = dataset.repeat() # to avoid exhausting the smaller dataset, makes one epoch infinite
@@ -566,6 +638,9 @@ class QCMLDataLoaderSparseParallel:
                     split = 'validation'
             
             dataset = builder.as_dataset(split=split, shuffle_files=True)
+            
+            # Standardize dataset fields to ensure compatibility
+            dataset = standardize_dataset_fields(dataset)
             
             datasets.append(dataset)
 

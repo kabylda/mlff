@@ -288,11 +288,15 @@ def get_energy_and_force_fn_sparse(model: StackNetSparse):
         hirshfeld_ratios = model.apply(params, inputs)['hirshfeld_ratios']  # (num_graphs)
         hirshfeld_ratios = safe_scale(hirshfeld_ratios, node_mask)  # (num_graphs)
 
+        c6_ratios = model.apply(params, inputs)['c6_ratios']
+        c6_ratios = safe_scale(c6_ratios, node_mask)
+
         return dict(
             energy=energy,
             forces=forces,
             dipole_vec=dipole_vec,
-            hirshfeld_ratios=hirshfeld_ratios
+            hirshfeld_ratios=hirshfeld_ratios,
+            c6_ratios=c6_ratios
         )
 
     return energy_and_force_and_dipole_and_hirsh_fn

@@ -88,6 +88,7 @@ training:
     forces: 0.99  # Loss weight for the forces.
     dipole_vec: 0.01 
     hirshfeld_ratios: 0.01
+    c6_ratios: 0.01 
   use_robust_loss: false  # Use robust loss function.
   robust_loss_alpha: 1.99 # Alpha parameter for the robust loss function.
   model_seed: 0  # Seed used for the initialization of the model parameters.

@@ -36,6 +36,7 @@ class EnergySparse(BaseSubModule):
     dispersion_energy: Optional[Any] = None
     partial_charges: Optional[Any] = None
     hirshfeld_ratios: Optional[Any] = None
+    c6_ratios: Optional[Any] = None
     zbl_repulsion_bool: bool = False
     zbl_repulsion: Optional[Any] = None
     use_final_bias_bool: bool = True
@@ -154,6 +155,7 @@ class EnergySparse(BaseSubModule):
 
         if self.dispersion_energy_bool:
             inputs.update(**self.hirshfeld_ratios(inputs))
+            inputs.update(**self.c6_ratios(inputs))
             inputs.update(**self.dispersion_energy(inputs))
             atomic_energy += inputs['dispersion_energy']
 
@@ -192,7 +194,7 @@ class EnergySparse(BaseSubModule):
 
         for imq_key in self.output_intermediate_quantities:
             # Skip the intermediate quantities that are already defined as observables
-            if imq_key in ['dipole_vec', 'energy', 'hirshfeld_ratios']:
+            if imq_key in ['dipole_vec', 'energy', 'hirshfeld_ratios', 'c6_ratios']:
                 continue
             imq = inputs.get(imq_key)
             if imq is None:
@@ -289,36 +291,158 @@ class HirshfeldSparse(BaseSubModule):
         # hirshfeld_ratios = jnp.abs(v_eff) # (num_nodes)
         # hirshfeld_ratios = safe_scale(hirshfeld_ratios, node_mask)
 
-        num_features = x.shape[-1]
+        # num_features = x.shape[-1]
 
-        v_shift = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
-        q = nn.Embed(num_embeddings=100, features=int(num_features / 2))(atomic_numbers)  # shape: (n,F/2)
+        # v_shift = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
+        # q = nn.Embed(num_embeddings=100, features=int(num_features / 2))(atomic_numbers)  # shape: (n,F/2)
+
+        q = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
+
+        # if self.regression_dim is not None:
+        #     y = nn.Dense(
+        #         int(self.regression_dim / 2),
+        #         kernel_init=nn.initializers.lecun_normal(),
+        #         name='hirshfeld_ratios_dense_regression'
+        #     )(x)  # (num_nodes, regression_dim)
+        #     y = self.activation_fn(y)  # (num_nodes, regression_dim)
+        #     k = nn.Dense(
+        #         int(num_features / 2),
+        #         kernel_init=self.kernel_init,
+        #         name='hirshfeld_ratios_dense_final'
+        #     )(y)  # (num_nodes)
+        # else:
+        #     k = nn.Dense(
+        #         int(num_features / 2),
+        #         kernel_init=self.kernel_init,
+        #         name='hirshfeld_ratios_dense_final'
+        #     )(x)  # (num_nodes)
+
 
         if self.regression_dim is not None:
             y = nn.Dense(
-                int(self.regression_dim / 2),
+                self.regression_dim,
                 kernel_init=nn.initializers.lecun_normal(),
                 name='hirshfeld_ratios_dense_regression'
             )(x)  # (num_nodes, regression_dim)
             y = self.activation_fn(y)  # (num_nodes, regression_dim)
-            k = nn.Dense(
-                int(num_features / 2),
+            x_ = nn.Dense(
+                1,
                 kernel_init=self.kernel_init,
                 name='hirshfeld_ratios_dense_final'
-            )(y)  # (num_nodes)
+            )(y).squeeze(axis=-1)  # (num_nodes)
         else:
-            k = nn.Dense(
-                int(num_features / 2),
+            x_ = nn.Dense(
+                1,
                 kernel_init=self.kernel_init,
                 name='hirshfeld_ratios_dense_final'
-            )(x)  # (num_nodes)
+            )(x).squeeze(axis=-1)  # (num_nodes)
 
-        qk = (q * k / jnp.sqrt(k.shape[-1])).sum(axis=-1)
-
-        v_eff = v_shift + qk  # shape: (n)
-        hirshfeld_ratios = safe_scale(jnp.abs(v_eff), node_mask)
+        hirshfeld_ratios = safe_scale(jnp.abs(x_ + q), node_mask)
 
         return dict(hirshfeld_ratios=hirshfeld_ratios)
+       
+        # qk = (q * k / jnp.sqrt(k.shape[-1])).sum(axis=-1)
+
+        # v_eff = v_shift + qk  # shape: (n)
+        # hirshfeld_ratios = safe_scale(jnp.abs(v_eff), node_mask)
+
+        # return dict(hirshfeld_ratios=hirshfeld_ratios)
+
+    def reset_output_convention(self, output_convention):
+        self.output_convention = output_convention
+
+class C6RatiosSparse(BaseSubModule):
+    prop_keys: Dict
+    regression_dim: int = None
+    activation_fn: Callable[[Any], Any] = lambda u: u
+    output_is_zero_at_init: bool = True
+    module_name = 'c6_ratios'
+
+
+    def setup(self):
+        if self.output_is_zero_at_init:
+            self.kernel_init = nn.initializers.zeros_init()
+        else:
+            self.kernel_init = nn.initializers.lecun_normal()
+
+    @nn.compact
+    def __call__(self,
+                 inputs: Dict,
+                 *args,
+                 **kwargs) -> Dict[str, jnp.ndarray]:
+        """
+        #TODO: Update docstring
+        Predict Hirshfeld volumes from atom-wise features `x` and atomic types `z`.
+
+        Args:
+            inputs (Dict):
+                x (Array): Atomic features, shape: (num_nodes, num_features)
+                atomic_numbers (Array): Atomic types, shape: (num_nodes)
+                node_mask (Array): Node mask, (num_nodes)
+                theory_mask (Array): Theory mask, (num_nodes, num_theory_levels)
+            *args ():
+            **kwargs ():
+
+        Returns: Dictionary of form {'v_eff': Array}, where Array are the predicted Hirshfeld ratios
+
+        """
+        x = inputs['x']  # (num_nodes, num_features)
+        atomic_numbers = inputs['atomic_numbers']  # (num_nodes)
+        node_mask = inputs['node_mask']  # (num_nodes)
+
+        # num_features = x.shape[-1]
+
+        # v_shift = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
+        # q = nn.Embed(num_embeddings=100, features=int(num_features / 2))(atomic_numbers)  # shape: (n,F/2)
+        q = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
+
+        # if self.regression_dim is not None:
+        #     y = nn.Dense(
+        #         int(self.regression_dim / 2),
+        #         kernel_init=nn.initializers.lecun_normal(),
+        #         name='c6_ratios_dense_regression'
+        #     )(x)  # (num_nodes, regression_dim)
+        #     y = self.activation_fn(y)  # (num_nodes, regression_dim)
+        #     k = nn.Dense(
+        #         int(num_features / 2),
+        #         kernel_init=self.kernel_init,
+        #         name='c6_ratios_dense_final'
+        #     )(y)  # (num_nodes)
+        # else:
+        #     k = nn.Dense(
+        #         int(num_features / 2),
+        #         kernel_init=self.kernel_init,
+        #         name='c6_ratios_dense_final'
+        #     )(x)  # (num_nodes)
+
+        if self.regression_dim is not None:
+            y = nn.Dense(
+                self.regression_dim,
+                kernel_init=nn.initializers.lecun_normal(),
+                name='c6_ratios_dense_regression'
+            )(x)  # (num_nodes, regression_dim)
+            y = self.activation_fn(y)  # (num_nodes, regression_dim)
+            x_ = nn.Dense(
+                1,
+                kernel_init=self.kernel_init,
+                name='c6_ratios_dense_final'
+            )(y).squeeze(axis=-1)  # (num_nodes)
+        else:
+            x_ = nn.Dense(
+                1,
+                kernel_init=self.kernel_init,
+                name='c6_ratios_dense_final'
+            )(x).squeeze(axis=-1)  # (num_nodes)
+
+        # qk = (q * k / jnp.sqrt(k.shape[-1])).sum(axis=-1)
+
+        # v_eff = v_shift + qk  # shape: (n)
+        # c6_ratios = safe_scale(jnp.abs(v_eff), node_mask)
+
+        # return dict(c6_ratios=c6_ratios)
+        c6_ratios = safe_scale(jnp.abs(x_ + q), node_mask)
+
+        return dict(c6_ratios=c6_ratios)
 
     def reset_output_convention(self, output_convention):
         self.output_convention = output_convention
@@ -495,6 +619,7 @@ def mixing_rules(
         idx_i: jnp.ndarray,
         idx_j: jnp.ndarray,
         hirshfeld_ratios: jnp.ndarray,
+        c6_ratios: Optional[jnp.ndarray] = None
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     dtype = hirshfeld_ratios.dtype
 
@@ -503,15 +628,24 @@ def mixing_rules(
     hirshfeld_ratio_i = hirshfeld_ratios[idx_i]
     hirshfeld_ratio_j = hirshfeld_ratios[idx_j]
 
+    if c6_ratios is None:
+        C6_ratio_i = jnp.square(hirshfeld_ratio_i)
+        C6_ratio_j = jnp.square(hirshfeld_ratio_j)
+    else:
+        C6_ratio_i = c6_ratios[idx_i]
+        C6_ratio_j = c6_ratios[idx_j]
+        jax.debug.print("C6 ratios provided, using them for mixing rules")
+
     alpha_i = jnp.asarray(jnp.take(alphas, atomic_number_i, axis=0), dtype=dtype) * hirshfeld_ratio_i
-    C6_i = jnp.asarray(jnp.take(C6_coef, atomic_number_i, axis=0), dtype=dtype) * jnp.square(hirshfeld_ratio_i)
+    C6_i = jnp.asarray(jnp.take(C6_coef, atomic_number_i, axis=0), dtype=dtype) * C6_ratio_i
     alpha_j = jnp.asarray(jnp.take(alphas, atomic_number_j, axis=0), dtype=dtype) * hirshfeld_ratio_j
-    C6_j = jnp.asarray(jnp.take(C6_coef, atomic_number_j, axis=0), dtype=dtype) * jnp.square(hirshfeld_ratio_j)
+    C6_j = jnp.asarray(jnp.take(C6_coef, atomic_number_j, axis=0), dtype=dtype) * C6_ratio_j
 
     alpha_ij = (alpha_i + alpha_j) / 2
     C6_ij = 2 * C6_i * C6_j * alpha_j * alpha_i / (alpha_i ** 2 * C6_j + alpha_j ** 2 * C6_i)
 
     return alpha_ij, C6_ij
+
 
 
 @jax.jit
@@ -891,6 +1025,7 @@ class DispersionEnergySparse(nn.Module):
     cutoff_lr: float
     cutoff_lr_damping: float
     hirshfeld_ratios: Optional[Any]
+    c6_ratios: Optional[Any] = None
     dispersion_energy_scale: float = 1.0
 
     neighborlist_format: str = 'sparse'  # or 'ordered_sparse'
@@ -912,6 +1047,11 @@ class DispersionEnergySparse(nn.Module):
         if hirshfeld_ratios is None:
             hirshfeld_ratios =  self.hirshfeld_ratios(inputs)['hirshfeld_ratios']
 
+        # Calculate C6 ratios
+        c6_ratios = inputs.get('c6_ratios')
+        if c6_ratios is None:
+            c6_ratios = self.c6_ratios(inputs)['hirshfeld_ratios']
+
         # Get atomic numbers (needed to link to the free-atom reference values)
         atomic_numbers = inputs['atomic_numbers']  # (num_nodes)
 
@@ -920,7 +1060,8 @@ class DispersionEnergySparse(nn.Module):
             atomic_numbers,
             idx_i_lr,
             idx_j_lr,
-            hirshfeld_ratios
+            hirshfeld_ratios,
+            c6_ratios=c6_ratios
         )
 
         # Use cubic fit for gamma

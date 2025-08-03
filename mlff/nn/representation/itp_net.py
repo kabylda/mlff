@@ -2,7 +2,7 @@ import flax.linen as nn
 from mlff.nn.stacknet import StackNetSparse
 from mlff.nn.embed import GeometryEmbedE3x
 from mlff.nn.layer import ITPLayer
-from mlff.nn.observable import EnergySparse, DipoleVecSparse, HirshfeldSparse, PartialChargesSparse, ElectrostaticEnergySparse, DispersionEnergySparse, ZBLRepulsionSparse
+from mlff.nn.observable import EnergySparse, DipoleVecSparse, HirshfeldSparse, C6RatiosSparse, PartialChargesSparse, ElectrostaticEnergySparse, DispersionEnergySparse, ZBLRepulsionSparse
 
 from .representation_utils import make_embedding_modules
 
@@ -102,11 +102,21 @@ def init_itp_net(
         activation_fn=getattr(
             nn.activation, energy_activation_fn
         ) if energy_activation_fn != 'identity' else lambda u: u,
-    ) 
+    )
+
+    c6_ratios = C6RatiosSparse(
+        prop_keys=None,
+        output_is_zero_at_init=output_is_zero_at_init,
+        regression_dim=energy_regression_dim,
+        activation_fn=getattr(
+            nn.activation, energy_activation_fn
+        ) if energy_activation_fn != 'identity' else lambda u: u,
+    )
 
     dispersion_energy = DispersionEnergySparse(
         prop_keys=None,
         hirshfeld_ratios=hirshfeld_ratios,
+        c6_ratios=c6_ratios,
         cutoff_lr=cutoff_lr,
         cutoff_lr_damping=dispersion_energy_cutoff_lr_damping,
         dispersion_energy_scale=dispersion_energy_scale,
@@ -152,6 +162,6 @@ def init_itp_net(
         geometry_embeddings=[geometry_embed],
         feature_embeddings=embedding_modules,
         layers=layers,
-        observables=[energy, dipole_vec, hirshfeld_ratios],
+        observables=[energy, dipole_vec, hirshfeld_ratios, c6_ratios],
         prop_keys=None
     )
