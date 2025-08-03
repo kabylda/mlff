@@ -15,6 +15,7 @@ from mlff.masking.mask import safe_mask
 from mlff.nn.observable.dispersion_ref_data import alphas, C6_coef
 from mlff.masking.mask import safe_scale
 from mlff.nn.activation_function.activation_function import softplus_inverse, softplus
+import wandb
 
 import jaxpme
 
@@ -69,16 +70,7 @@ class EnergySparse(BaseSubModule):
         batch_segments = inputs['batch_segments']  # (num_nodes)
         node_mask = inputs['node_mask']  # (num_nodes)
         graph_mask = inputs['graph_mask']  # (num_graphs)
-        #output_intermediate_quantities = inputs['output_intermediate_quantities']
         theory_mask = inputs['theory_mask'] # (num_graphs, num_theory_levels)
-        # theory_level = inputs['theory_level'] # (num_graphs)
-        
-        # Debug print total graphs and graphs per theory level
-        # total_graphs = jnp.sum(graph_mask)
-        # graphs_per_level = jnp.sum(theory_mask * graph_mask[:, None], axis=0)
-        # jax.debug.print("Total graphs (excluding padding): {}", total_graphs)
-        # jax.debug.print("Graphs per theory level: {}", graphs_per_level)
-
 
         num_theory_levels = theory_mask.shape[-1]
         theory_mask = theory_mask[batch_segments] # (num_nodes, num_theory_levels)
@@ -254,73 +246,11 @@ class HirshfeldSparse(BaseSubModule):
         x = inputs['x']  # (num_nodes, num_features)
         atomic_numbers = inputs['atomic_numbers']  # (num_nodes)
         node_mask = inputs['node_mask']  # (num_nodes)
-        # theory_mask = inputs['theory_mask']  # (num_nodes, num_theory_levels)
-        # num_theory_levels = theory_mask.shape[-1]
-
-        # # Element-dependent bias
-        # v_shift = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1) # shape: (num_nodes)
-    
-        # if self.regression_dim is not None:
-        #     y = nn.Dense(
-        #         self.regression_dim,
-        #         kernel_init=nn.initializers.lecun_normal(),
-        #         name='hirshfeld_ratios_dense_regression'
-        #     )(x)  # (num_nodes, regression_dim)
-        #     y = self.activation_fn(y)  # (num_nodes, regression_dim)
-        #     v_pred = nn.Dense(
-        #         num_theory_levels,
-        #         kernel_init=self.kernel_init,
-        #         name='hirshfeld_ratios_dense_final'
-        #     )(y)  # (num_nodes, num_theory_levels)
-        # else:
-        #     v_pred = nn.Dense(
-        #         num_theory_levels,
-        #         kernel_init=self.kernel_init,
-        #         name='hirshfeld_ratios_dense_final'
-        #     )(x)  # (num_nodes, num_theory_levels)
-
-        # # Apply theory mask
-        # v_pred_masked = jnp.where(
-        #     theory_mask,
-        #     v_pred,
-        #     jnp.zeros_like(v_pred)
-        # ).sum(axis=-1)
-        
-        # # Add shift and take absolute value
-        # v_eff = v_shift + v_pred_masked  # shape: (num_nodes)
-        # hirshfeld_ratios = jnp.abs(v_eff) # (num_nodes)
-        # hirshfeld_ratios = safe_scale(hirshfeld_ratios, node_mask)
-
-        # num_features = x.shape[-1]
-
-        # v_shift = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
-        # q = nn.Embed(num_embeddings=100, features=int(num_features / 2))(atomic_numbers)  # shape: (n,F/2)
-
-        q = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
-
-        # if self.regression_dim is not None:
-        #     y = nn.Dense(
-        #         int(self.regression_dim / 2),
-        #         kernel_init=nn.initializers.lecun_normal(),
-        #         name='hirshfeld_ratios_dense_regression'
-        #     )(x)  # (num_nodes, regression_dim)
-        #     y = self.activation_fn(y)  # (num_nodes, regression_dim)
-        #     k = nn.Dense(
-        #         int(num_features / 2),
-        #         kernel_init=self.kernel_init,
-        #         name='hirshfeld_ratios_dense_final'
-        #     )(y)  # (num_nodes)
-        # else:
-        #     k = nn.Dense(
-        #         int(num_features / 2),
-        #         kernel_init=self.kernel_init,
-        #         name='hirshfeld_ratios_dense_final'
-        #     )(x)  # (num_nodes)
-
+        q = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)
 
         if self.regression_dim is not None:
             y = nn.Dense(
-                self.regression_dim,
+                int(self.regression_dim / 2),
                 kernel_init=nn.initializers.lecun_normal(),
                 name='hirshfeld_ratios_dense_regression'
             )(x)  # (num_nodes, regression_dim)
@@ -340,16 +270,11 @@ class HirshfeldSparse(BaseSubModule):
         hirshfeld_ratios = safe_scale(jnp.abs(x_ + q), node_mask)
 
         return dict(hirshfeld_ratios=hirshfeld_ratios)
-       
-        # qk = (q * k / jnp.sqrt(k.shape[-1])).sum(axis=-1)
-
-        # v_eff = v_shift + qk  # shape: (n)
-        # hirshfeld_ratios = safe_scale(jnp.abs(v_eff), node_mask)
-
-        # return dict(hirshfeld_ratios=hirshfeld_ratios)
 
     def reset_output_convention(self, output_convention):
         self.output_convention = output_convention
+
+
 
 class C6RatiosSparse(BaseSubModule):
     prop_keys: Dict
@@ -389,35 +314,11 @@ class C6RatiosSparse(BaseSubModule):
         x = inputs['x']  # (num_nodes, num_features)
         atomic_numbers = inputs['atomic_numbers']  # (num_nodes)
         node_mask = inputs['node_mask']  # (num_nodes)
-
-        # num_features = x.shape[-1]
-
-        # v_shift = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
-        # q = nn.Embed(num_embeddings=100, features=int(num_features / 2))(atomic_numbers)  # shape: (n,F/2)
-        q = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)  # shape: (num_nodes)
-
-        # if self.regression_dim is not None:
-        #     y = nn.Dense(
-        #         int(self.regression_dim / 2),
-        #         kernel_init=nn.initializers.lecun_normal(),
-        #         name='c6_ratios_dense_regression'
-        #     )(x)  # (num_nodes, regression_dim)
-        #     y = self.activation_fn(y)  # (num_nodes, regression_dim)
-        #     k = nn.Dense(
-        #         int(num_features / 2),
-        #         kernel_init=self.kernel_init,
-        #         name='c6_ratios_dense_final'
-        #     )(y)  # (num_nodes)
-        # else:
-        #     k = nn.Dense(
-        #         int(num_features / 2),
-        #         kernel_init=self.kernel_init,
-        #         name='c6_ratios_dense_final'
-        #     )(x)  # (num_nodes)
+        q = nn.Embed(num_embeddings=100, features=1)(atomic_numbers).squeeze(axis=-1)
 
         if self.regression_dim is not None:
             y = nn.Dense(
-                self.regression_dim,
+                int(self.regression_dim / 2),
                 kernel_init=nn.initializers.lecun_normal(),
                 name='c6_ratios_dense_regression'
             )(x)  # (num_nodes, regression_dim)
@@ -434,18 +335,13 @@ class C6RatiosSparse(BaseSubModule):
                 name='c6_ratios_dense_final'
             )(x).squeeze(axis=-1)  # (num_nodes)
 
-        # qk = (q * k / jnp.sqrt(k.shape[-1])).sum(axis=-1)
-
-        # v_eff = v_shift + qk  # shape: (n)
-        # c6_ratios = safe_scale(jnp.abs(v_eff), node_mask)
-
-        # return dict(c6_ratios=c6_ratios)
         c6_ratios = safe_scale(jnp.abs(x_ + q), node_mask)
 
         return dict(c6_ratios=c6_ratios)
 
     def reset_output_convention(self, output_convention):
         self.output_convention = output_convention
+
 
 
 class PartialChargesSparse(BaseSubModule):
@@ -501,23 +397,11 @@ class PartialChargesSparse(BaseSubModule):
 
         x_q = safe_scale(x_ + q_, node_mask)
 
-        # If residue_charge/segments is provided, use it for charge conservation per residue/monomer
-        residue_charge = inputs.get('residue_charge')
-        if residue_charge is not None:
-            # Residue-based charge conservation
-            residue_charge = jnp.asarray(residue_charge, dtype=jnp.float32)
-            residue_segments = jnp.pad(
-                jnp.asarray(inputs['residue_segments'], dtype=jnp.int32).at[-1].set(2),
-                (0, num_nodes - len(inputs['residue_segments'])),
-                constant_values=2
-            )
-            batch_segments, total_charge, num_graphs = residue_segments, residue_charge, residue_charge.shape[0]
-        
         # Unified charge conservation calculation
-        predicted_charge = segment_sum(x_q, segment_ids=batch_segments, num_segments=num_graphs) # (num_graphs)
+        predicted_charge = segment_sum(x_q, segment_ids=batch_segments, num_segments=num_graphs)
         atom_counts = jnp.bincount(batch_segments, length=num_graphs)
         charge_conservation = jnp.reciprocal(atom_counts) * (total_charge - predicted_charge)
-        partial_charges = x_q + charge_conservation[batch_segments] # (num_nodes)
+        partial_charges = x_q + charge_conservation[batch_segments]
 
         return dict(partial_charges=partial_charges)
 
@@ -628,13 +512,8 @@ def mixing_rules(
     hirshfeld_ratio_i = hirshfeld_ratios[idx_i]
     hirshfeld_ratio_j = hirshfeld_ratios[idx_j]
 
-    if c6_ratios is None:
-        C6_ratio_i = jnp.square(hirshfeld_ratio_i)
-        C6_ratio_j = jnp.square(hirshfeld_ratio_j)
-    else:
-        C6_ratio_i = c6_ratios[idx_i]
-        C6_ratio_j = c6_ratios[idx_j]
-        jax.debug.print("C6 ratios provided, using them for mixing rules")
+    C6_ratio_i = c6_ratios[idx_i]
+    C6_ratio_j = c6_ratios[idx_j]
 
     alpha_i = jnp.asarray(jnp.take(alphas, atomic_number_i, axis=0), dtype=dtype) * hirshfeld_ratio_i
     C6_i = jnp.asarray(jnp.take(C6_coef, atomic_number_i, axis=0), dtype=dtype) * C6_ratio_i
@@ -671,7 +550,6 @@ def coulomb_erf(
         idx_j: jnp.ndarray,
         ke: float,
         sigma: float,
-        cutoff: float = None,
         neighborlist_format: str = 'sparse'
 ) -> jnp.ndarray:
     """ Pairwise Coulomb interaction with erf damping """
@@ -691,66 +569,9 @@ def coulomb_erf(
     _ke = jnp.asarray(ke, dtype=input_dtype)
     _sigma = jnp.asarray(sigma, dtype=input_dtype)
 
-    pairwise = c * _ke * q[idx_i] * q[idx_j] / rij
-    if cutoff is None:
-        return pairwise * jax.lax.erf(rij / _sigma)
-    else:
-        _cutoff = jnp.asarray(cutoff, dtype=input_dtype)
-        return pairwise * (jax.lax.erf(rij / _sigma) - jax.lax.erf(rij / (_cutoff * jnp.sqrt(2.0))))
+    pairwise = c * _ke * q[idx_i] * q[idx_j] * jax.lax.erf(rij / _sigma) / rij
 
-@partial(jax.jit, static_argnames=('neighborlist_format',))
-def coulomb_erf_shifted_force_smooth_pme(
-        q: jnp.ndarray,
-        rij: jnp.ndarray,
-        idx_i: jnp.ndarray,
-        idx_j: jnp.ndarray,
-        ke: float,
-        sigma: float,
-        cutoff: float = None,
-        cuton: float = None,
-        smearing: float = None,
-        neighborlist_format: str = 'sparse'
-) -> jnp.ndarray:
-
-    input_dtype = rij.dtype
-
-    if neighborlist_format == 'sparse':
-        c = jnp.asarray(0.5, dtype=input_dtype)
-    elif neighborlist_format == 'ordered_sparse':
-        c = jnp.asarray(1.0, dtype=input_dtype)
-    else:
-        raise ValueError(
-            f"neighborlist_format must be one of either 'ordered_sparse' or 'sparse'. "
-            f"received {neighborlist_format=}"
-        )
-
-    _ke = jnp.asarray(ke, dtype=input_dtype)
-    _sigma = jnp.asarray(sigma, dtype=input_dtype)
-    _smearing = jnp.asarray(smearing, dtype=input_dtype)* jnp.sqrt(2.0)
-    _cuton = jnp.asarray(cuton, dtype=input_dtype)
-
-    def potential(r):
-        return jax.lax.erf(r / _sigma) / r - jax.lax.erf(r / _smearing ) / r
-
-    def force1(r,cut):
-        return (2 * r * jnp.exp(-(r / cut) ** 2) / (jnp.sqrt(jnp.pi) * cut) - jax.lax.erf(r / cut)) / r ** 2
-
-    def force(r):
-        return force1(r, _sigma) - force1(r, _smearing)
-
-    _cutoff = jnp.asarray(cutoff, dtype=input_dtype)
-    f = switching_fn(rij, _cuton, _cutoff)
-    pairwise = potential(rij)
-    shift = potential(_cutoff)
-    force_shift = force(_cutoff)
-
-    shifted_potential = pairwise - shift - force_shift * (rij - _cutoff)
-
-    return jnp.where(
-        rij < _cutoff,
-        c * _ke * q[idx_i] * q[idx_j] * (f * (pairwise - shift) + (1 - f) * shifted_potential),
-        0.0
-    )
+    return pairwise
 
 
 @partial(jax.jit, static_argnames=('neighborlist_format',))
@@ -791,7 +612,7 @@ def coulomb_erf_shifted_force_smooth(
     def force(r):
         return (2 * r * jnp.exp(-(r / _sigma) ** 2) / (jnp.sqrt(jnp.pi) * _sigma) - jax.lax.erf(r / _sigma)) / r ** 2
 
-    f = switching_fn(rij, _cuton, _cutoff)
+    #f = switching_fn(rij, _cuton, _cutoff)
     pairwise = potential(rij)
     shift = potential(_cutoff)
     force_shift = force(_cutoff)
@@ -800,7 +621,8 @@ def coulomb_erf_shifted_force_smooth(
 
     return jnp.where(
         rij < _cutoff,
-        c * _ke * q[idx_i] * q[idx_j] * (f * (pairwise - shift) + (1 - f) * shifted_potential),
+        #c * _ke * q[idx_i] * q[idx_j] * (f * (pairwise - shift) + (1 - f) * shifted_potential),
+        c * _ke * q[idx_i] * q[idx_j] * shifted_potential,
         0.0
     )
 
@@ -888,56 +710,64 @@ class ElectrostaticEnergySparse(BaseSubModule):
         idx_i_lr = inputs['idx_i_lr']
         idx_j_lr = inputs['idx_j_lr']
         d_ij_lr = inputs['d_ij_lr']
-        k_smearing = inputs.get('k_smearing')
 
         # Calculate partial charges
-        partial_charges = inputs.get('partial_charges')
-        if partial_charges is None:
-            partial_charges = self.partial_charges(inputs)['partial_charges']
+        partial_charges = self.partial_charges(inputs)['partial_charges']
+
+#       # If cutoff is set, we apply damping with error function with smoothing to zero at cutoff_lr.
+#       # We also apply force shifting to reduce discontinuity artifacts.
+#       if self.cutoff_lr is not None:
+#           # Calculate electrostatic energies per long-range edge
+#           atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth(
+#               partial_charges,
+#               d_ij_lr,
+#               idx_i_lr,
+#               idx_j_lr,
+#               ke=self.ke,
+#               sigma=self.electrostatic_energy_scale,
+#               cutoff=self.cutoff_lr,
+#               cuton=self.cutoff_lr * 0.45,
+#               neighborlist_format=self.neighborlist_format
+#           )
+
+#       # If no cutoff is set, we just apply damping with error function and no explicit smoothing to zero.
+#       else:
+#           # Calculate electrostatic energies per long-range edge
+#           atomic_electrostatic_energy_ij = coulomb_erf(
+#               partial_charges,
+#               d_ij_lr,
+#               idx_i_lr,
+#               idx_j_lr,
+#               ke=self.ke,
+#               sigma=self.electrostatic_energy_scale,
+#               cutoff=None,
+#               neighborlist_format=self.neighborlist_format
+#           )
+
+#       # Calculate electrostatic atomic energies via summing over long-range neighbors
+#       atomic_electrostatic_energy = segment_sum(
+#           atomic_electrostatic_energy_ij,
+#           segment_ids=idx_i_lr,
+#           num_segments=num_nodes
+#       )  # (num_nodes)
+
+#       # Mask padded nodes
+#       atomic_electrostatic_energy = safe_scale(atomic_electrostatic_energy, node_mask)
+
 
         # If cutoff is set, we apply damping with error function with smoothing to zero at cutoff_lr.
         # We also apply force shifting to reduce discontinuity artifacts.
-        if self.cutoff_lr is not None:
-            if k_smearing is None:
-                # Calculate electrostatic energies per long-range edge
-                atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth(
-                    partial_charges,
-                    d_ij_lr,
-                    idx_i_lr,
-                    idx_j_lr,
-                    ke=self.ke,
-                    sigma=self.electrostatic_energy_scale,
-                    cutoff=self.cutoff_lr,
-                    cuton=self.cutoff_lr * 0.45,
-                    neighborlist_format=self.neighborlist_format
-                )
-            else:
-                atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth_pme(
-                    partial_charges,
-                    d_ij_lr,
-                    idx_i_lr,
-                    idx_j_lr,
-                    ke=self.ke,
-                    sigma=self.electrostatic_energy_scale,
-                    cutoff=self.cutoff_lr,
-                    cuton=4.5,
-                    smearing=k_smearing,
-                    neighborlist_format=self.neighborlist_format
-                )
 
-        # If no cutoff is set, we just apply damping with error function and no explicit smoothing to zero.
-        else:
-            # Calculate electrostatic energies per long-range edge
-            atomic_electrostatic_energy_ij = coulomb_erf(
-                partial_charges,
-                d_ij_lr,
-                idx_i_lr,
-                idx_j_lr,
-                ke=self.ke,
-                sigma=self.electrostatic_energy_scale,
-                cutoff=None,
-                neighborlist_format=self.neighborlist_format
-            )            
+        # Calculate electrostatic energies per long-range edge
+        atomic_electrostatic_energy_ij = coulomb_erf(
+            partial_charges,
+            d_ij_lr,
+            idx_i_lr,
+            idx_j_lr,
+            ke=self.ke,
+            sigma=self.electrostatic_energy_scale,
+            neighborlist_format=self.neighborlist_format
+        )
 
         # Calculate electrostatic atomic energies via summing over long-range neighbors
         atomic_electrostatic_energy = segment_sum(
@@ -954,71 +784,6 @@ class ElectrostaticEnergySparse(BaseSubModule):
     def reset_output_convention(self, output_convention):
         pass
 
-class ElectrostaticEnergyKspace(BaseSubModule):
-    prop_keys: Dict
-    partial_charges: Any
-    do_ewald: bool = False
-    interpolation_nodes: int = 4
-    ke: float = 14.399645351950548
-    electrostatic_energy_scale: float = 1.0
-    module_name: str = "electrostatic_energy_kspace"
-
-    def setup(self):
-        from jaxpme.solvers import ewald, pme
-        from jaxpme.potentials import potential as get_potential
-
-        if self.do_ewald:
-            self.solver = ewald(get_potential())
-        else:
-            self.solver = pme(get_potential(), interpolation_nodes=self.interpolation_nodes)
-    
-    @nn.compact
-    def __call__(self, inputs: Dict, *args, **kwargs) -> Dict[str, jnp.ndarray]:
-        from jaxpme.kspace import generate_kvectors, get_reciprocal
-
-        positions = inputs['positions']
-        k_grid = inputs['k_grid']
-        k_smearing = inputs['k_smearing']
-        cell = inputs['cell']
-        node_mask = inputs["node_mask"]
-        # Calculate partial charges
-        partial_charges = inputs.get('partial_charges')
-        if partial_charges is None:
-            partial_charges = self.partial_charges(inputs)['partial_charges']
-
-        assert positions is not None, "Positions must be provided for k-space calculation."
-        assert k_grid is not None, "k_grid must be provided for k-space calculation."
-        assert cell is not None, "Cell must be provided for k-space calculation."
-        assert k_smearing is not None, "k_smearing must be provided for k-space calculation."
-        assert cell.shape == (3, 3), f"Invalid cell shape {cell.shape}. Expected (3, 3)."
-
-        volume = jnp.abs(jnp.linalg.det(cell))
-        reciprocal_cell = get_reciprocal(cell)
-        kvectors = generate_kvectors(
-            reciprocal_cell, k_grid.shape, dtype=positions.dtype, for_ewald=self.do_ewald
-        )
-
-        #if node_mask is not None:
-        #    partial_charges *= node_mask
-
-        if self.do_ewald:
-            potentials = self.solver.kspace(k_smearing, partial_charges, kvectors, positions, volume)
-        else:
-            potentials = self.solver.kspace(k_smearing, partial_charges, reciprocal_cell, k_grid, kvectors, positions, volume)
-
-        #if node_mask is not None:
-        #    potentials *= node_mask
-
-        energies = partial_charges * potentials
-        energies *= self.ke
-
-        # Mask padded nodes
-        energies = safe_scale(energies, node_mask)
-
-        return dict(electrostatic_energy_kspace=energies)
-
-    def reset_output_convention(self, output_convention):
-        pass
 
 class DispersionEnergySparse(nn.Module):
     prop_keys: Dict
@@ -1043,14 +808,8 @@ class DispersionEnergySparse(nn.Module):
         input_dtype = d_ij_lr.dtype
 
         # Calculate Hirshfeld ratios
-        hirshfeld_ratios = inputs.get('hirshfeld_ratios')
-        if hirshfeld_ratios is None:
-            hirshfeld_ratios =  self.hirshfeld_ratios(inputs)['hirshfeld_ratios']
-
-        # Calculate C6 ratios
-        c6_ratios = inputs.get('c6_ratios')
-        if c6_ratios is None:
-            c6_ratios = self.c6_ratios(inputs)['hirshfeld_ratios']
+        hirshfeld_ratios = self.hirshfeld_ratios(inputs)['hirshfeld_ratios']
+        c6_ratios = self.c6_ratios(inputs)['c6_ratios']
 
         # Get atomic numbers (needed to link to the free-atom reference values)
         atomic_numbers = inputs['atomic_numbers']  # (num_nodes)

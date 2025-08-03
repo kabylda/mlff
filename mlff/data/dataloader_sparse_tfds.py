@@ -130,12 +130,6 @@ def create_graph_tuple_tf(
     num_atoms = tf.shape(atomic_numbers)[0]
 
     properties = element.keys()
-    if 'energy' in properties:
-        globals_dict['energy'] = tf.reshape(element['energy'], (1,))
-    else:
-        energy = np.empty((1,))
-        energy[:] = np.nan
-        globals_dict['energy'] = tf.convert_to_tensor(energy, dtype=tf.float32)
     if 'forces' in properties:
         nodes_dict['forces'] = element['forces']
     if 'theory_level' in properties:
@@ -171,6 +165,14 @@ def create_graph_tuple_tf(
         )
         nodes_dict['c6_ratios'] = c6_ratios
 
+    if 'energy' in properties and theory_level[0] != 4:
+        en = tf.reshape(element['energy'], (1,))
+        globals_dict['energy'] = en
+        #if en < 100 and theory_level[0] != 4:
+    else:
+        energy = np.empty((1,))
+        energy[:] = np.nan
+        globals_dict['energy'] = tf.convert_to_tensor(energy, dtype=tf.float32)
     if 'multiplicity' in properties:
         globals_dict['num_unpaired_electrons'] = tf.reshape(element['multiplicity'], (1,)) - 1
     if 'charge' in properties:
@@ -546,7 +548,7 @@ class QCMLDataLoaderSparseParallel:
             Batches of data
         """
         shuffle_seed = np.random.randint(0, 2**31 - 1) # different shuffle seed for each epoch
-        output_queue = self.manager.Queue(maxsize=4) # cache maximum of 4 batches
+        output_queue = self.manager.Queue(maxsize=2) # cache maximum of 2 batches
 
         for i in range(self.n_proc):
             config = WorkerConfig(
