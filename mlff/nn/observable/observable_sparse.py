@@ -784,6 +784,71 @@ class ElectrostaticEnergySparse(BaseSubModule):
     def reset_output_convention(self, output_convention):
         pass
 
+class ElectrostaticEnergyKspace(BaseSubModule):
+    prop_keys: Dict
+    partial_charges: Any
+    do_ewald: bool = False
+    interpolation_nodes: int = 4
+    ke: float = 14.399645351950548
+    electrostatic_energy_scale: float = 1.0
+    module_name: str = "electrostatic_energy_kspace"
+
+    def setup(self):
+        from jaxpme.solvers import ewald, pme
+        from jaxpme.potentials import potential as get_potential
+
+        if self.do_ewald:
+            self.solver = ewald(get_potential())
+        else:
+            self.solver = pme(get_potential(), interpolation_nodes=self.interpolation_nodes)
+    
+    @nn.compact
+    def __call__(self, inputs: Dict, *args, **kwargs) -> Dict[str, jnp.ndarray]:
+        from jaxpme.kspace import generate_kvectors, get_reciprocal
+
+        positions = inputs['positions']
+        k_grid = inputs['k_grid']
+        k_smearing = inputs['k_smearing']
+        cell = inputs['cell']
+        node_mask = inputs["node_mask"]
+        # Calculate partial charges
+        partial_charges = inputs.get('partial_charges')
+        if partial_charges is None:
+            partial_charges = self.partial_charges(inputs)['partial_charges']
+
+        assert positions is not None, "Positions must be provided for k-space calculation."
+        assert k_grid is not None, "k_grid must be provided for k-space calculation."
+        assert cell is not None, "Cell must be provided for k-space calculation."
+        assert k_smearing is not None, "k_smearing must be provided for k-space calculation."
+        assert cell.shape == (3, 3), f"Invalid cell shape {cell.shape}. Expected (3, 3)."
+
+        volume = jnp.abs(jnp.linalg.det(cell))
+        reciprocal_cell = get_reciprocal(cell)
+        kvectors = generate_kvectors(
+            reciprocal_cell, k_grid.shape, dtype=positions.dtype, for_ewald=self.do_ewald
+        )
+
+        #if node_mask is not None:
+        #    partial_charges *= node_mask
+
+        if self.do_ewald:
+            potentials = self.solver.kspace(k_smearing, partial_charges, kvectors, positions, volume)
+        else:
+            potentials = self.solver.kspace(k_smearing, partial_charges, reciprocal_cell, k_grid, kvectors, positions, volume)
+
+        #if node_mask is not None:
+        #    potentials *= node_mask
+
+        energies = partial_charges * potentials
+        energies *= self.ke
+
+        # Mask padded nodes
+        energies = safe_scale(energies, node_mask)
+
+        return dict(electrostatic_energy_kspace=energies)
+
+    def reset_output_convention(self, output_convention):
+        pass
 
 class DispersionEnergySparse(nn.Module):
     prop_keys: Dict
