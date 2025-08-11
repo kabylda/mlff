@@ -133,8 +133,8 @@ def create_graph_tuple_tf(
     if 'forces' in properties:
         nodes_dict['forces'] = element['forces']
     if 'theory_level' in properties:
-        theory_level = tf.reshape(element['theory_level'], (1,))
-        #theory_level = tf.reshape(2, (1,))
+        # theory_level = tf.reshape(element['theory_level'], (1,))
+        theory_level = tf.reshape(0, (1,)) # QCML head
         globals_dict['theory_level'] = theory_level
         theory_mask = tf.one_hot(theory_level, depth=max_num_theory_levels)  # (1, num_theory_levels)
         globals_dict['theory_mask'] = theory_mask
