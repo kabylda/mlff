@@ -612,7 +612,7 @@ def coulomb_erf_shifted_force_smooth(
     def force(r):
         return (2 * r * jnp.exp(-(r / _sigma) ** 2) / (jnp.sqrt(jnp.pi) * _sigma) - jax.lax.erf(r / _sigma)) / r ** 2
 
-    #f = switching_fn(rij, _cuton, _cutoff)
+    f = switching_fn(rij, _cuton, _cutoff)
     pairwise = potential(rij)
     shift = potential(_cutoff)
     force_shift = force(_cutoff)
@@ -621,8 +621,8 @@ def coulomb_erf_shifted_force_smooth(
 
     return jnp.where(
         rij < _cutoff,
-        #c * _ke * q[idx_i] * q[idx_j] * (f * (pairwise - shift) + (1 - f) * shifted_potential),
-        c * _ke * q[idx_i] * q[idx_j] * shifted_potential,
+        c * _ke * q[idx_i] * q[idx_j] * (f * (pairwise - shift) + (1 - f) * shifted_potential),
+        #c * _ke * q[idx_i] * q[idx_j] * shifted_potential,
         0.0
     )
 
@@ -714,35 +714,35 @@ class ElectrostaticEnergySparse(BaseSubModule):
         # Calculate partial charges
         partial_charges = self.partial_charges(inputs)['partial_charges']
 
-#       # If cutoff is set, we apply damping with error function with smoothing to zero at cutoff_lr.
-#       # We also apply force shifting to reduce discontinuity artifacts.
-#       if self.cutoff_lr is not None:
-#           # Calculate electrostatic energies per long-range edge
-#           atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth(
-#               partial_charges,
-#               d_ij_lr,
-#               idx_i_lr,
-#               idx_j_lr,
-#               ke=self.ke,
-#               sigma=self.electrostatic_energy_scale,
-#               cutoff=self.cutoff_lr,
-#               cuton=self.cutoff_lr * 0.45,
-#               neighborlist_format=self.neighborlist_format
-#           )
+        # If cutoff is set, we apply damping with error function with smoothing to zero at cutoff_lr.
+        # We also apply force shifting to reduce discontinuity artifacts.
+        if self.cutoff_lr is not None:
+            # Calculate electrostatic energies per long-range edge
+            atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth(
+                partial_charges,
+                d_ij_lr,
+                idx_i_lr,
+                idx_j_lr,
+                ke=self.ke,
+                sigma=self.electrostatic_energy_scale,
+                cutoff=self.cutoff_lr,
+                cuton=self.cutoff_lr * 0.45,
+                neighborlist_format=self.neighborlist_format
+            )
 
-#       # If no cutoff is set, we just apply damping with error function and no explicit smoothing to zero.
-#       else:
-#           # Calculate electrostatic energies per long-range edge
-#           atomic_electrostatic_energy_ij = coulomb_erf(
-#               partial_charges,
-#               d_ij_lr,
-#               idx_i_lr,
-#               idx_j_lr,
-#               ke=self.ke,
-#               sigma=self.electrostatic_energy_scale,
-#               cutoff=None,
-#               neighborlist_format=self.neighborlist_format
-#           )
+        # If no cutoff is set, we just apply damping with error function and no explicit smoothing to zero.
+        else:
+            # Calculate electrostatic energies per long-range edge
+            atomic_electrostatic_energy_ij = coulomb_erf(
+                partial_charges,
+                d_ij_lr,
+                idx_i_lr,
+                idx_j_lr,
+                ke=self.ke,
+                sigma=self.electrostatic_energy_scale,
+                cutoff=None,
+                neighborlist_format=self.neighborlist_format
+            )
 
 #       # Calculate electrostatic atomic energies via summing over long-range neighbors
 #       atomic_electrostatic_energy = segment_sum(
@@ -759,15 +759,15 @@ class ElectrostaticEnergySparse(BaseSubModule):
         # We also apply force shifting to reduce discontinuity artifacts.
 
         # Calculate electrostatic energies per long-range edge
-        atomic_electrostatic_energy_ij = coulomb_erf(
-            partial_charges,
-            d_ij_lr,
-            idx_i_lr,
-            idx_j_lr,
-            ke=self.ke,
-            sigma=self.electrostatic_energy_scale,
-            neighborlist_format=self.neighborlist_format
-        )
+       #atomic_electrostatic_energy_ij = coulomb_erf(
+       #    partial_charges,
+       #    d_ij_lr,
+       #    idx_i_lr,
+       #    idx_j_lr,
+       #    ke=self.ke,
+       #    sigma=self.electrostatic_energy_scale,
+       #    neighborlist_format=self.neighborlist_format
+       #)
 
         # Calculate electrostatic atomic energies via summing over long-range neighbors
         atomic_electrostatic_energy = segment_sum(
