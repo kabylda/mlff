@@ -269,6 +269,12 @@ class mlffCalculatorSparse(Calculator):
                             obs_fn_for_name_and_index,
                         )(system.R[index],  system.R, system, neighbors, obs_name, index)
 
+            @partial(jax.jit, static_argnames=('index', 'obs_name',))
+            def obs_jacobian_fn( system, neighbors, obs_name, index):
+                return jax.jacobian(
+                            obs_fn_for_name_and_index,
+                        )(system.R[index],  system.R, system, neighbors, obs_name, index)
+
 
             print("Calculating observables gradients")
             print(f'Observables: {observables}, output_atom_indices: {output_atom_indices}')
@@ -276,7 +282,10 @@ class mlffCalculatorSparse(Calculator):
             def calculate_fn(system, neighbors):
                 obs_grad_dict = {}
                 for o in observables:
-                    obs_grad_dict[o+'_grad'] = {index: obs_value_and_grad_fn(system, neighbors, o, index) for index in output_atom_indices}
+                    if o == 'dipole_vec':
+                        obs_grad_dict[o+'_grad'] = {index: obs_jacobian_fn(system, neighbors, o, index) for index in output_atom_indices}
+                    else:
+                        obs_grad_dict[o+'_grad'] = {index: obs_value_and_grad_fn(system, neighbors, o, index) for index in output_atom_indices}
                 
                 return {'energy': None, 'obs_grads': obs_grad_dict}
 
