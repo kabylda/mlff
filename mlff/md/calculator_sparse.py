@@ -71,7 +71,7 @@ def matrix_to_voigt(matrix):
 
 
 class mlffCalculatorSparse(Calculator):
-    implemented_properties = ['energy', 'forces', 'stress', 'free_energy', 'hessian', 'obs_grads']
+    implemented_properties = ['energy', 'forces', 'stress', 'free_energy', 'hessian']
 
     @classmethod
     def create_from_ckpt_dir(
@@ -79,7 +79,6 @@ class mlffCalculatorSparse(Calculator):
             ckpt_dir: str,
             calculate_stress: bool = False,
             calculate_hessian: bool = False,
-            calculate_obs_grads: bool = False,
             lr_neighbors_bool: bool = True,
             lr_cutoff: float = 10.,
             dispersion_energy_cutoff_lr_damping: float = 2.,
@@ -91,10 +90,14 @@ class mlffCalculatorSparse(Calculator):
             model: str = 'so3krates',
             has_aux: bool = False,
             from_file: bool = False,
-            output_intermediate_quantities: Optional[Sequence[str]] = None,
+            observables: Optional[Sequence[str]] = None,
             output_atom_indices: Optional[Sequence[int]] = None,
             **kwargs
     ):
+        if observables is not None and len(observables) > 0:
+            output_intermediate_quantities = [o.replace('_grad','').replace('_jac','') for o in (observables)]
+        else:
+            output_intermediate_quantities = None
 
         mlff_potential = MLFFPotentialSparse.create_from_ckpt_dir(
             ckpt_dir=ckpt_dir,
@@ -114,7 +117,6 @@ class mlffCalculatorSparse(Calculator):
         return cls(potential=mlff_potential,
                    calculate_stress=calculate_stress,
                    calculate_hessian=calculate_hessian,
-                   calculate_obs_grads=calculate_obs_grads,
                    capacity_multiplier=capacity_multiplier,
                    buffer_size_multiplier=buffer_size_multiplier,
                    skin=skin,
@@ -122,7 +124,7 @@ class mlffCalculatorSparse(Calculator):
                    lr_cutoff=lr_cutoff,
                    dtype=dtype,
                    has_aux=has_aux,
-                   observables=output_intermediate_quantities,
+                   observables=observables,
                    output_atom_indices=output_atom_indices,
                    )
 
@@ -134,7 +136,6 @@ class mlffCalculatorSparse(Calculator):
             skin: float,
             calculate_stress: bool,
             calculate_hessian: bool,
-            calculate_obs_grads: bool,
             dtype: np.dtype,
             has_aux: bool,
             observables: Optional[Sequence[str]] = None,
@@ -147,6 +148,14 @@ class mlffCalculatorSparse(Calculator):
         """
 
         super(mlffCalculatorSparse, self).__init__(*args, **kwargs)
+
+        calculate_obs_grads = False
+        if observables is not None and any(obs.endswith('_grad') or obs.endswith('_jac') for obs in observables):
+            calculate_obs_grads = True
+            print("Calculating observables gradients")
+            if output_atom_indices is None:
+                raise ValueError("When calculating observables gradients, output_atom_indices must be provided.")
+            print(f'Observables: {observables}, output_atom_indices: {output_atom_indices}')
 
         assert not (calculate_stress and calculate_hessian), "Calculating stress and hessian at the same time is not supported."
         assert not (calculate_stress and calculate_obs_grads), "Calculating stress and observables gradients at the same time is not supported."
@@ -236,6 +245,8 @@ class mlffCalculatorSparse(Calculator):
         
         elif calculate_obs_grads:
 
+            # Elementary functions:
+
             def energy_fn(R, system, neighbors, has_aux=False):
                 local_system = System(R, system.Z, system.cell, system.total_charge, system.num_unpaired_electrons, system.k_grid, system.k_smearing)
                 graph = system_to_graph(local_system, neighbors)
@@ -252,7 +263,27 @@ class mlffCalculatorSparse(Calculator):
                     return atomic_energy.sum()
 
             @partial(jax.jit, static_argnames=('obs_name',))
-            def obs_fn_for_name_and_index(index_position, all_position, system, neighbors, obs_name, index):
+            def obs_fn_for_name(position, system, neighbors, obs_name):
+                return energy_fn(
+                        position,
+                        system,
+                        neighbors,
+                        has_aux=True
+                    )[1][obs_name]
+
+            @partial(jax.jit, static_argnames=('obs_name',))
+            def summed_obs_fn_for_name(position, system, neighbors, obs_name):
+                return energy_fn(
+                        position,
+                        system,
+                        neighbors,
+                        has_aux=True
+                    )[1][obs_name].sum()
+
+            # Masking functions to calculate gradients/Jacobians for specific atoms only:
+
+            @partial(jax.jit, static_argnames=('obs_name',))
+            def atomic_obs_fn_for_name_and_index(index_position, all_position, system, neighbors, obs_name, index):
                 position = jax.lax.dynamic_update_index_in_dim(
                     all_position, index_position, index, axis=0
                 )
@@ -263,31 +294,87 @@ class mlffCalculatorSparse(Calculator):
                         has_aux=True
                     )[1][obs_name][index]
 
-            @partial(jax.jit, static_argnames=('index', 'obs_name',))
-            def obs_value_and_grad_fn( system, neighbors, obs_name, index):
+            @partial(jax.jit, static_argnames=('obs_name',))
+            def summed_obs_fn_for_name_and_index(index_position, all_position, system, neighbors, obs_name, index):
+                position = jax.lax.dynamic_update_index_in_dim(
+                    all_position, index_position, index, axis=0
+                )
+                return energy_fn(
+                        position,
+                        system,
+                        neighbors,
+                        has_aux=True
+                    )[1][obs_name].sum()
+
+            @partial(jax.jit, static_argnames=('obs_name',))
+            def obs_fn_for_name_and_index(index_position, all_position, system, neighbors, obs_name, index):
+                position = jax.lax.dynamic_update_index_in_dim(
+                    all_position, index_position, index, axis=0
+                )
+                return energy_fn(
+                        position,
+                        system,
+                        neighbors,
+                        has_aux=True
+                    )[1][obs_name]
+
+            # Value and gradient of a scalar-valued function:
+
+            @partial(jax.jit, static_argnames=('obs_name',))
+            def summed_obs_value_and_grad_fn( system, neighbors, obs_name, index):
                 return jax.value_and_grad(
-                            obs_fn_for_name_and_index,
+                            summed_obs_fn_for_name_and_index,
                         )(system.R[index],  system.R, system, neighbors, obs_name, index)
 
-            @partial(jax.jit, static_argnames=('index', 'obs_name',))
+            @partial(jax.jit, static_argnames=('obs_name',))
+            def atomic_obs_value_and_grad_fn( system, neighbors, obs_name, index):
+                return jax.value_and_grad(
+                            atomic_obs_fn_for_name_and_index,
+                        )(system.R[index],  system.R, system, neighbors, obs_name, index)
+
+            # Jacobian of a vector-valued functions:
+
+            # @partial(jax.jit, static_argnames=('index', 'obs_name',))
+            # def atomic_obs_jacobian_fn( system, neighbors, obs_name, index):
+            #     return jax.jacobian(
+            #                 atomic_obs_fn_for_name_and_index,
+            #             )(system.R[index],  system.R, system, neighbors, obs_name, index)
+
+            @partial(jax.jit, static_argnames=('obs_name',))
             def obs_jacobian_fn( system, neighbors, obs_name, index):
                 return jax.jacobian(
                             obs_fn_for_name_and_index,
                         )(system.R[index],  system.R, system, neighbors, obs_name, index)
 
-
-            print("Calculating observables gradients")
-            print(f'Observables: {observables}, output_atom_indices: {output_atom_indices}')
-
             def calculate_fn(system, neighbors):
                 obs_grad_dict = {}
                 for o in observables:
-                    if o == 'dipole_vec':
-                        obs_grad_dict[o+'_grad'] = {index: obs_jacobian_fn(system, neighbors, o, index) for index in output_atom_indices}
+                    # if o == 'dipole_vec':
+                    #     obs_grad_dict[o+'_grad'] = {index: atomic_obs_jacobian_fn(system, neighbors, o, index) for index in output_atom_indices}
+                    # elif 'energy' in o:
+                    #     obs_grad_dict[o+'_grad'] = {index: atomic_obs_value_and_grad_fn(system, neighbors, o, index) for index in output_atom_indices}
+                    #     #obs_grad_dict[o+'_grad'] = {index: summed_obs_value_and_grad_fn(system, neighbors, o, index) for index in output_atom_indices}
+                    #     #obs_grad_dict[o+'_grad'] = jax.value_and_grad(summed_obs_fn_for_name, allow_int=True)(system.R, system, neighbors, o)
+                    # else:
+                    #     obs_grad_dict[o+'_grad'] = {index: obs_jacobian_fn(system, neighbors, o, index) for index in output_atom_indices}
+                    obase=o.replace('_grad','').replace('_jac','')
+                    values = obs_fn_for_name(system.R, system, neighbors, obase)
+                    if o.endswith('_grad'):
+                        obs_grad_dict[o] = {index: [values[index], summed_obs_value_and_grad_fn(system, neighbors, obase, index)[1]] for index in output_atom_indices}
+                        #obs_grad_dict[o] = {index: summed_obs_value_and_grad_fn(system, neighbors, obase, index) for index in output_atom_indices}
+                        # Note that the forces computed from atomic energies need to be scaled by 2 for a correct gradient of the total energy
+                        # Using the total energy to compute the gradient is more stable but more expensive and we dont get the atomic energies for free
+                        # obs_grad_dict[o] = {index: atomic_obs_value_and_grad_fn(system, neighbors, obase, index) for index in output_atom_indices}
+                        #obs_grad_dict[o+'_grad'] = jax.value_and_grad(summed_obs_fn_for_name, allow_int=True)(system.R, system, neighbors, o)
                     else:
-                        obs_grad_dict[o+'_grad'] = {index: obs_value_and_grad_fn(system, neighbors, o, index) for index in output_atom_indices}
-                
-                return {'energy': None, 'obs_grads': obs_grad_dict}
+                        if o.endswith('_jac'):
+                            if 'energy' in o:
+                                raise NotImplementedError("Energy is a scalar observable, its Jacobian is not defined.")
+                            obs_grad_dict[o] = {index: [values[index], obs_jacobian_fn(system, neighbors, obase, index)] for index in output_atom_indices}
+                        else:
+                            obs_grad_dict[o] = values[output_atom_indices]
+
+                return {'energy': None, 'aux': obs_grad_dict}
 
 
         else:
