@@ -147,6 +147,9 @@ class EnergySparse(BaseSubModule):
 
         if self.electrostatic_energy_bool:
             inputs.update(**self.partial_charges(inputs))
+            inputs.update({'no_sigma':True})
+            inputs.update({'electrostatic_energy_undamped':self.electrostatic_energy(inputs)['electrostatic_energy']})
+            del inputs['no_sigma']
             inputs.update(**self.electrostatic_energy(inputs))
             atomic_energy += inputs['electrostatic_energy']
             if inputs.get('k_smearing', None) is not None:
@@ -155,6 +158,9 @@ class EnergySparse(BaseSubModule):
 
         if self.dispersion_energy_bool:
             inputs.update(**self.hirshfeld_ratios(inputs))
+            inputs.update({'no_sigma':True})
+            inputs.update({'dispersion_energy_undamped':self.dispersion_energy(inputs)['dispersion_energy']})
+            del inputs['no_sigma']
             inputs.update(**self.dispersion_energy(inputs))
             atomic_energy += inputs['dispersion_energy']
 
@@ -489,6 +495,39 @@ def vdw_QDO_disp_damp(
 
     return c * V3 * jnp.asarray(Hartree, dtype=input_dtype)
 
+@partial(jax.jit, static_argnames=('neighborlist_format',))
+def vdw_QDO_disp_damp_nosigma(
+        R,
+        gamma,
+        C6,
+        alpha_ij,
+        gamma_scale,
+        neighborlist_format: str = 'sparse'
+):
+    # Determine the input dtype
+    input_dtype = R.dtype
+
+    #  Compute the vdW-QDO dispersion energy (in eV)
+    if neighborlist_format == 'sparse':
+        c = jnp.asarray(0.5, dtype=input_dtype)
+    elif neighborlist_format == 'ordered_sparse':
+        c = jnp.asarray(1.0, dtype=input_dtype)
+    else:
+        raise ValueError(
+            f"neighborlist_format must be one of either 'ordered_sparse' or 'sparse'. "
+            f"received {neighborlist_format=}"
+        )
+
+    C8 = 5 / gamma * C6
+    C10 = 245 / 8 / gamma ** 2 * C6
+
+    C8 = jnp.asarray(C8, dtype=input_dtype)
+    C10 = jnp.asarray(C10, dtype=input_dtype)
+
+    V3 = -C6 / (jnp.power(R, 6)) - C8 / (jnp.power(R, 8)) - C10 / (
+                jnp.power(R, 10))
+
+    return c * V3 * jnp.asarray(Hartree, dtype=input_dtype)
 
 @jax.jit
 def mixing_rules(
@@ -619,6 +658,59 @@ def coulomb_erf_shifted_force_smooth_pme(
         0.0
     )
 
+@partial(jax.jit, static_argnames=('neighborlist_format',))
+def coulomb_erf_shifted_force_smooth_pme_nosigma(
+        q: jnp.ndarray,
+        rij: jnp.ndarray,
+        idx_i: jnp.ndarray,
+        idx_j: jnp.ndarray,
+        ke: float,
+        sigma: float,
+        cutoff: float = None,
+        cuton: float = None,
+        smearing: float = None,
+        neighborlist_format: str = 'sparse'
+) -> jnp.ndarray:
+
+    input_dtype = rij.dtype
+
+    if neighborlist_format == 'sparse':
+        c = jnp.asarray(0.5, dtype=input_dtype)
+    elif neighborlist_format == 'ordered_sparse':
+        c = jnp.asarray(1.0, dtype=input_dtype)
+    else:
+        raise ValueError(
+            f"neighborlist_format must be one of either 'ordered_sparse' or 'sparse'. "
+            f"received {neighborlist_format=}"
+        )
+
+    _ke = jnp.asarray(ke, dtype=input_dtype)
+    _sigma = jnp.asarray(sigma, dtype=input_dtype)
+    _smearing = jnp.asarray(smearing, dtype=input_dtype)* jnp.sqrt(2.0)
+    _cuton = jnp.asarray(cuton, dtype=input_dtype)
+
+    def potential(r):
+        return 1.0 / r - jax.lax.erf(r / _smearing ) / r
+
+    def force1(r,cut):
+        return (2 * r * jnp.exp(-(r / cut) ** 2) / (jnp.sqrt(jnp.pi) * cut) - jax.lax.erf(r / cut)) / r ** 2
+
+    def force(r):
+        return - 1.0 / r ** 2 - force1(r, _smearing)
+
+    _cutoff = jnp.asarray(cutoff, dtype=input_dtype)
+    f = switching_fn(rij, _cuton, _cutoff)
+    pairwise = potential(rij)
+    shift = potential(_cutoff)
+    force_shift = force(_cutoff)
+
+    shifted_potential = pairwise - shift - force_shift * (rij - _cutoff)
+
+    return jnp.where(
+        rij < _cutoff,
+        c * _ke * q[idx_i] * q[idx_j] * (f * (pairwise - shift) + (1 - f) * shifted_potential),
+        0.0
+    )
 
 @partial(jax.jit, static_argnames=('neighborlist_format',))
 def coulomb_erf_shifted_force_smooth(
@@ -671,6 +763,57 @@ def coulomb_erf_shifted_force_smooth(
         0.0
     )
 
+@partial(jax.jit, static_argnames=('neighborlist_format',))
+def coulomb_erf_shifted_force_smooth_nosigma(
+        q: jnp.ndarray,
+        rij: jnp.ndarray,
+        idx_i: jnp.ndarray,
+        idx_j: jnp.ndarray,
+        ke: float,
+        sigma: float,
+        cutoff: float,
+        cuton: float,
+        neighborlist_format: str = 'sparse'
+) -> jnp.ndarray:
+    """ Pairwise Coulomb interaction with erf damping, using Shifted Force method """
+
+    input_dtype = rij.dtype
+
+    if neighborlist_format == 'sparse':
+        c = jnp.asarray(0.5, dtype=input_dtype)
+    elif neighborlist_format == 'ordered_sparse':
+        c = jnp.asarray(1.0, dtype=input_dtype)
+    else:
+        raise ValueError(
+            f"neighborlist_format must be one of either 'ordered_sparse' or 'sparse'. "
+            f"received {neighborlist_format=}"
+        )
+
+    # Cast the constants to input dtype
+    _sigma = jnp.asarray(sigma, dtype=input_dtype)
+    _ke = jnp.asarray(ke, dtype=input_dtype)
+    _cutoff = jnp.asarray(cutoff, dtype=input_dtype)
+    _cuton = jnp.asarray(cuton, dtype=input_dtype)
+
+    def potential(r):
+        return 1.0 / r
+
+    def force(r):
+        return - 1.0 / r ** 2
+    
+
+    f = switching_fn(rij, _cuton, _cutoff)
+    pairwise = potential(rij)
+    shift = potential(_cutoff)
+    force_shift = force(_cutoff)
+
+    shifted_potential = pairwise - shift - force_shift * (rij - _cutoff)
+
+    return jnp.where(
+        rij < _cutoff,
+        c * _ke * q[idx_i] * q[idx_j] * (f * (pairwise - shift) + (1 - f) * shifted_potential),
+        0.0
+    )
 
 class ZBLRepulsionSparse(BaseSubModule):
     """
@@ -755,7 +898,8 @@ class ElectrostaticEnergySparse(BaseSubModule):
         idx_i_lr = inputs['idx_i_lr']
         idx_j_lr = inputs['idx_j_lr']
         d_ij_lr = inputs['d_ij_lr']
-        k_smearing = inputs.get('k_smearing')
+        k_smearing = inputs['k_smearing']
+        no_sigma = inputs.get('no_sigma',None)
 
         # Calculate partial charges
         partial_charges = inputs.get('partial_charges')
@@ -766,8 +910,9 @@ class ElectrostaticEnergySparse(BaseSubModule):
         # We also apply force shifting to reduce discontinuity artifacts.
         if self.cutoff_lr is not None:
             if k_smearing is None:
-                # Calculate electrostatic energies per long-range edge
-                atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth(
+                if no_sigma is not None:
+                    # Calculate electrostatic energies per long-range edge
+                    atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth_nosigma(
                     partial_charges,
                     d_ij_lr,
                     idx_i_lr,
@@ -777,9 +922,23 @@ class ElectrostaticEnergySparse(BaseSubModule):
                     cutoff=self.cutoff_lr,
                     cuton=self.cutoff_lr * 0.45,
                     neighborlist_format=self.neighborlist_format
-                )
+                    )
+                else:
+                    # Calculate electrostatic energies per long-range edge
+                    atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth(
+                    partial_charges,
+                    d_ij_lr,
+                    idx_i_lr,
+                    idx_j_lr,
+                    ke=self.ke,
+                    sigma=self.electrostatic_energy_scale,
+                    cutoff=self.cutoff_lr,
+                    cuton=self.cutoff_lr * 0.45,
+                    neighborlist_format=self.neighborlist_format
+                    )
             else:
-                atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth_pme(
+                if no_sigma is not None:
+                    atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth_pme_nosigma(
                     partial_charges,
                     d_ij_lr,
                     idx_i_lr,
@@ -790,7 +949,20 @@ class ElectrostaticEnergySparse(BaseSubModule):
                     cuton=4.5,
                     smearing=k_smearing,
                     neighborlist_format=self.neighborlist_format
-                )
+                    )
+                else:
+                    atomic_electrostatic_energy_ij = coulomb_erf_shifted_force_smooth_pme(
+                    partial_charges,
+                    d_ij_lr,
+                    idx_i_lr,
+                    idx_j_lr,
+                    ke=self.ke,
+                    sigma=self.electrostatic_energy_scale,
+                    cutoff=self.cutoff_lr,
+                    cuton=4.5,
+                    smearing=k_smearing,
+                    neighborlist_format=self.neighborlist_format
+                    )
 
         # If no cutoff is set, we just apply damping with error function and no explicit smoothing to zero.
         else:
@@ -801,7 +973,7 @@ class ElectrostaticEnergySparse(BaseSubModule):
                 idx_i_lr,
                 idx_j_lr,
                 ke=self.ke,
-                sigma=self.electrostatic_energy_scale,
+                sigma=sigma,
                 cutoff=None,
                 neighborlist_format=self.neighborlist_format
             )            
@@ -904,6 +1076,7 @@ class DispersionEnergySparse(nn.Module):
         idx_i_lr = inputs['idx_i_lr']
         idx_j_lr = inputs['idx_j_lr']
         d_ij_lr = inputs['d_ij_lr']
+        no_sigma = inputs.get('no_sigma',None)
 
         # Determine input dtype
         input_dtype = d_ij_lr.dtype
@@ -928,14 +1101,24 @@ class DispersionEnergySparse(nn.Module):
         gamma_ij = gamma_cubic_fit(alpha_ij)
 
         # Get dispersion energy, positions are converted to to a.u.
-        dispersion_energy_ij = vdw_QDO_disp_damp(
+        if no_sigma is not None:
+            dispersion_energy_ij = vdw_QDO_disp_damp_nosigma(
             d_ij_lr / jnp.asarray(Bohr, dtype=input_dtype),
             gamma_ij,
             C6_ij,
             alpha_ij,
             jnp.asarray(self.dispersion_energy_scale, dtype=input_dtype),
             self.neighborlist_format
-        )
+            )
+        else:
+            dispersion_energy_ij = vdw_QDO_disp_damp(
+            d_ij_lr / jnp.asarray(Bohr, dtype=input_dtype),
+            gamma_ij,
+            C6_ij,
+            alpha_ij,
+            jnp.asarray(self.dispersion_energy_scale, dtype=input_dtype),
+            self.neighborlist_format
+            )
 
         # If long-range cutoff is given, one needs to damp dispersion smoothly to zero at cutoff_lr.
         if self.cutoff_lr is not None:
