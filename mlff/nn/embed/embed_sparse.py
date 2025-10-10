@@ -175,7 +175,7 @@ class GeometryEmbedSparse(BaseSubModule):
         idx_j_lr = inputs.get('idx_j_lr')  # shape: (num_pairs_lr)
         cell = inputs.get('cell')  # shape: (num_graphs, 3, 3)
         cell_offsets = inputs.get('cell_offset')  # shape: (num_pairs, 3)
-        cell_offsets_lr = inputs.get('cell_offset_lr')  # shape: (num_pairs, 3)
+        #cell_offsets_lr = inputs.get('cell_offset_lr')  # shape: (num_pairs, 3)
 
         if self.input_convention == 'positions':
             positions = inputs['positions']  # (N, 3)
@@ -184,6 +184,14 @@ class GeometryEmbedSparse(BaseSubModule):
             r_ij = jax.vmap(
                 lambda i, j: positions[j] - positions[i]
             )(idx_i, idx_j)  # (num_pairs, 3)
+
+            # Apply minimal image convention if needed.
+            if cell is not None:
+                r_ij = add_cell_offsets_sparse(
+                    r_ij=r_ij,
+                    cell=cell,
+                    cell_offsets=cell_offsets
+                )  # shape: (num_pairs,3)
 
             r_ij_lr = None
             long_range_indices_present = False
@@ -197,33 +205,18 @@ class GeometryEmbedSparse(BaseSubModule):
 
             # Calculate pairwise distance vectors on long range indices.
             if long_range_indices_present is True:
-                r_ij_lr = jax.vmap(
-                    lambda i, j: positions[j] - positions[i]
-                )(idx_i_lr, idx_j_lr)  # (num_pairs_lr, 3)
-
-            # Apply minimal image convention if needed.
-            if cell is not None:
-                r_ij = add_cell_offsets_sparse(
-                    r_ij=r_ij,
-                    cell=cell,
-                    cell_offsets=cell_offsets
-                )  # shape: (num_pairs,3)
-
-                if long_range_indices_present is True:
-                    if cell_offsets_lr is None:
-                        raise ValueError(
-                            '`cell_offsets_lr` are required in GeometryEmbed when using global indices with periodic'
-                            'boundary conditions.'
-                        )
+                if cell is None:
+                    r_ij_lr = jax.vmap(
+                        lambda i, j: positions[j] - positions[i]
+                    )(idx_i_lr, idx_j_lr)  # (num_pairs_lr, 3)
+                else:
                     logging.warning(
                         'The use of long range indices with PBCs has not been tested thoroughly yet, so use with care!'
                     )
-
-                    r_ij_lr = add_cell_offsets_sparse(
-                        r_ij=r_ij_lr,
-                        cell=cell,
-                        cell_offsets=cell_offsets_lr
-                    )  # shape: (num_pairs_lr,3)
+                    r_ij_lr = jax.vmap(
+                        #lambda i, j: (positions[j] - positions[i]) % jnp.diag(cell[i])
+                        lambda i, j: positions[j] - positions[i] - jnp.round((positions[j] - positions[i]) @ jnp.linalg.inv(cell[i])) @ cell[i]
+                    )(idx_i_lr, idx_j_lr)  # (num_pairs_lr, 3)
 
         # Here it is assumed that PBC (if present) have already been respected in displacement calculation.
         elif self.input_convention == 'displacements':
