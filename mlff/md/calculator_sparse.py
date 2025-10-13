@@ -15,7 +15,7 @@ from mlff.mdx.potential import MLFFPotentialSparse
 try:
     from glp.calculators.utils import strain_graph, get_strain, strain_system
     from glp import System, atoms_to_system
-    from glp.graph import system_to_graph, constant_system_to_graph
+    from glp.graph import system_to_graph
 except ImportError:
     raise ImportError('Please install GLP package for running MD.')
 
