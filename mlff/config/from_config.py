@@ -637,6 +637,18 @@ def run_fine_tuning(
     config.neighborlist_format_lr = config_dict.placeholder(str)
     config.neighborlist_format_lr = 'sparse'
 
+    # Determine the workdir from which to load the model for fine-tuning.
+    start_from_workdir = Path(start_from_workdir).expanduser().resolve()
+    if not start_from_workdir.exists():
+        raise ValueError(
+            f'Trying to start fine tuning from {start_from_workdir} but directory does not exist.'
+        )
+    
+    # Load the config in the workdir to obtain the model hyperparameters and other important statistics.
+    hyperparams_path = start_from_workdir / 'hyperparameters.json'
+    with open(hyperparams_path, mode='r') as fp:
+        config_start_from_workdir = config_dict.ConfigDict(json.load(fp=fp))
+
     # Select a fine-tuning strategy.
     if strategy == 'full':
         # All parameters are re-fined.
@@ -652,16 +664,16 @@ def run_fine_tuning(
         trainable_subset_keys = ['observables_2']
     elif strategy == 'last_layer':
         # Only the last MP layer is refined.
-        trainable_subset_keys = [f'layers_{config.model.num_layers - 1}']
+        trainable_subset_keys = [f'layers_{config_start_from_workdir.model.num_layers - 1}']
     elif strategy == 'last_layer_and_final_mlp':
         # Only the last layer and the final MLP are refined.
-        trainable_subset_keys = [f'layers_{config.model.num_layers - 1}', 'observables_0']
+        trainable_subset_keys = [f'layers_{config_start_from_workdir.model.num_layers - 1}', 'observables_0']
     elif strategy == 'first_layer':
         # Only the first layer is refined.
         trainable_subset_keys = ['layers_0']
     elif strategy == 'first_layer_and_last_layer':
         # Only the first and layer MP layer are refined.
-        trainable_subset_keys = ['layers_0', f'layers_{config.model.num_layers - 1}']
+        trainable_subset_keys = ['layers_0', f'layers_{config_start_from_workdir.model.num_layers - 1}']
     else:
         raise ValueError(
             f'--strategy {strategy} is unknown. Select one of '
@@ -673,20 +685,21 @@ def run_fine_tuning(
             f'`first_layer_and_last_layer`)'
         )
 
-    # Determine the workdir from which to load the model for fine-tuning.
-    start_from_workdir = Path(start_from_workdir).expanduser().resolve()
-    if not start_from_workdir.exists():
-        raise ValueError(
-            f'Trying to start fine tuning from {start_from_workdir} but directory does not exist.'
-        )
+    # # Determine the workdir from which to load the model for fine-tuning.
+    # start_from_workdir = Path(start_from_workdir).expanduser().resolve()
+    # if not start_from_workdir.exists():
+    #     raise ValueError(
+    #         f'Trying to start fine tuning from {start_from_workdir} but directory does not exist.'
+    #     )
 
     # Workdir for fine-tuning experiments.
     workdir = workdir_from_config(config=config)
-    if workdir.exists():
-        raise ValueError(
-            f'Please specify new workdir for fine tuning. Workdir {workdir} already exists.'
-        )
-    workdir.mkdir(exist_ok=False)
+
+    # if workdir.exists():
+    #     raise ValueError(
+    #         f'Please specify new workdir for fine tuning. Workdir {workdir} already exists.'
+    #     )
+    workdir.mkdir(exist_ok=True)
 
     # Update the workdir in config with absolute path.
     config.workdir = str(workdir)
@@ -811,36 +824,37 @@ def run_fine_tuning(
     # Prepare training and validation data and load the data set statistics.
     training_data, validation_data, data_stats = prepare_training_and_validation_data(
         config=config,
+        model_config=config_start_from_workdir.model,
         loader=loader,
         tf_record_present=tf_record_present
     )
 
     # Check that message normalization has not change from original model to fine-tuning model.
-    hyperparams_path = start_from_workdir / 'hyperparameters.json'
-    with open(hyperparams_path, mode='r') as fp:
-        config_start_from_workdir = config_dict.ConfigDict(json.load(fp=fp))
+    # hyperparams_path = start_from_workdir / 'hyperparameters.json'
+    # with open(hyperparams_path, mode='r') as fp:
+    #     config_start_from_workdir = config_dict.ConfigDict(json.load(fp=fp))
 
-    if config_start_from_workdir.model.message_normalization != config.model.message_normalization:
-        raise ValueError(
-            f'Message normalization must be the same. '
-            f'Found {config_start_from_workdir.model.message_normalization} for the original config '
-            f'and {config.model.message_normalization} for the fine tuning config.'
-        )
+    # if config_start_from_workdir.model.message_normalization != config.model.message_normalization:
+    #     raise ValueError(
+    #         f'Message normalization must be the same. '
+    #         f'Found {config_start_from_workdir.model.message_normalization} for the original config '
+    #         f'and {config.model.message_normalization} for the fine tuning config.'
+    #     )
 
-    # If messages are normalized by the average number of neighbors, we need to load it from the old config file.
-    if config.model.message_normalization == 'avg_num_neighbors':
-        if config.data.avg_num_neighbors is not None:
-            logging.warning(
-                'Running fine tuning with config.model.message_normalization: avg_num_neighbors does not allow to '
-                'reset the avg_num_neighbors in the fine tuning config and must be set to null. It will be loaded from'
-                'the config in the workdir that is starting point for the fine tuning.'
-            )
+    # # If messages are normalized by the average number of neighbors, we need to load it from the old config file.
+    # if config.model.message_normalization == 'avg_num_neighbors':
+    #     if config.data.avg_num_neighbors is not None:
+    #         logging.warning(
+    #             'Running fine tuning with config.model.message_normalization: avg_num_neighbors does not allow to '
+    #             'reset the avg_num_neighbors in the fine tuning config and must be set to null. It will be loaded from'
+    #             'the config in the workdir that is starting point for the fine tuning.'
+    #         )
 
-        config.data.avg_num_neighbors = config_start_from_workdir.data.avg_num_neighbors
-        logging.mlff(
-            f'Read average number of neighbors = {config.data.avg_num_neighbors} from original config at'
-            f'{start_from_workdir}.'
-        )
+    #     config.data.avg_num_neighbors = config_start_from_workdir.data.avg_num_neighbors
+    #     logging.mlff(
+    #         f'Read average number of neighbors = {config.data.avg_num_neighbors} from original config at'
+    #         f'{start_from_workdir}.'
+    #     )
 
     opt = make_optimizer_from_config(config)
 
@@ -851,14 +865,10 @@ def run_fine_tuning(
             trainable_subset_keys=trainable_subset_keys
         )
 
-    # One could load the model from the original workdir itself, but this would mean to either have a specific
-    # fine_tuning_config or to silently ignore the model config in the config file. For now one has to make sure to
-    # define a suited model from config such that for now responsibility lies at the user. And code breaks if it is
-    # not done properly so is directly visible by user.
     if model == 'so3krates':
-        net = make_so3krates_sparse_from_config(config)
+        net = make_so3krates_sparse_from_config(config_start_from_workdir)
     elif model == 'itp_net':
-        net = make_itp_net_from_config(config)
+        net = make_itp_net_from_config(config_start_from_workdir)
     else:
         raise ValueError(
             f'{model=} is not a valid model.'
@@ -942,6 +952,13 @@ def run_fine_tuning(
     logging.mlff(
         f'Fine tuning model from {start_from_workdir} on {data_filepath}!'
     )
+
+    ckpt_dir = workdir / 'checkpoints'
+    if Path(ckpt_dir).exists():
+        raise ValueError(
+            f"Checkpoint directory {ckpt_dir} already exists."
+        )
+
     if tf_record_present is True:
         training_utils.fit_from_iterator(
             model=net,
@@ -956,7 +973,7 @@ def run_fine_tuning(
             training_iterator=training_data,
             validation_iterator=validation_data,
             params=params,
-            ckpt_dir=workdir / 'checkpoints',
+            ckpt_dir=ckpt_dir,
             eval_every_num_steps=config.training.eval_every_num_steps,
             allow_restart=config.training.allow_restart,
             training_seed=config.training.training_seed,
@@ -979,7 +996,7 @@ def run_fine_tuning(
             training_data=training_data,
             validation_data=validation_data,
             params=params,
-            ckpt_dir=workdir / 'checkpoints',
+            ckpt_dir=ckpt_dir,
             eval_every_num_steps=config.training.eval_every_num_steps,
             allow_restart=config.training.allow_restart,
             num_epochs=config.training.num_epochs,
@@ -1061,9 +1078,15 @@ def data_loader_from_config(config):
     return loader, tf_record_present
 
 
-def prepare_training_and_validation_data(config, loader, tf_record_present):
+def prepare_training_and_validation_data(config, loader, tf_record_present, model_config: Optional = None):
     # Lock the config.
     config = config.lock()
+    # If model config is not None, lock it. Otherwise, use model config from the config. 
+    # This handles the case where config and model config can be different, i.e. during finetuning or transfer learning.
+    if model_config is not None:
+        model_config = model_config.lock()
+    else:
+        model_config = config.model
 
     workdir = workdir_from_config(config=config)
     data_filepaths = data_path_from_config(config=config)
@@ -1108,7 +1131,7 @@ def prepare_training_and_validation_data(config, loader, tf_record_present):
 
         # Cutoff is in Angstrom, so we have to divide the cutoff by the length unit.
         training_and_validation_data, data_stats = loader.load(
-            cutoff=config.model.cutoff / length_unit,
+            cutoff=model_config.cutoff / length_unit,
             cutoff_lr=config.data.neighbors_lr_cutoff / length_unit if config.data.neighbors_lr_bool is True else None,
             calculate_neighbors_lr=config.data.neighbors_lr_bool,
             pick_idx=training_and_validation_indices
