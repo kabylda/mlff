@@ -936,7 +936,21 @@ def run_fine_tuning(
     #     config.training.batch_max_num_nodes = batch_max_num_nodes
     #     config.training.batch_max_num_edges = batch_max_num_edges
     #     config.training.batch_max_num_pairs = batch_max_num_pairs
-
+    
+    # Finalize the config for IO
+    # Unlock config.
+    config = config.unlock()
+    # Set model config from the model config of the loaded workdir.
+    config.model = config_start_from_workdir.model
+    # For average number of neighbors message normalization, we have to overwrite the average
+    # number of neighbors in case a finetuned model will serve as starting point for another finetuning run.
+    # Otherwise the second finetuned model, will use the average number of neighbors from the first finetuning run, 
+    # not corresponding to the trained message normalization.
+    if config_start_from_workdir.model.message_normalization == 'avg_num_neighbors':
+        config.data.avg_num_neighbors = config_start_from_workdir.data.avg_num_neighbors
+    # Lock config.
+    config = config.lock()
+    
     with open(workdir / 'hyperparameters.json', 'w') as fp:
         json.dump(config.to_dict(), fp)
 
