@@ -973,7 +973,7 @@ class ElectrostaticEnergySparse(BaseSubModule):
                 idx_i_lr,
                 idx_j_lr,
                 ke=self.ke,
-                sigma=sigma,
+                sigma=self.electrostatic_energy_scale,
                 cutoff=None,
                 neighborlist_format=self.neighborlist_format
             )            

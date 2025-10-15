@@ -286,10 +286,6 @@ def ASE_to_jraph(
         receivers = np.array(i)
 
     if calculate_neighbors_lr:
-        if mol.get_pbc().any():
-            raise NotImplementedError(
-                'Long-range neighborhoods can only be calculated for non-PBC at the moment.'
-            )
         if cutoff_lr is None:
             raise ValueError(
                 f'cutoff_lr must be specified for {calculate_neighbors_lr=}. Received {cutoff_lr=}.'
