@@ -584,6 +584,8 @@ def run_evaluation(
                     total += value.size
                 elif isinstance(value, dict):
                     total += count_params(value)
+                elif isinstance(value, np.ndarray):
+                    total += value.size
         return total
 
     total_params = count_params(params)
@@ -822,6 +824,8 @@ def run_fine_tuning(
                     total += value.size
                 elif isinstance(value, dict):
                     total += count_params(value)
+                elif isinstance(value, np.ndarray):
+                    total += value.size
         return total
 
     total_params = count_params(params)
