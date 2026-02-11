@@ -43,9 +43,9 @@ def graph_mse_loss(y, y_label, batch_segments, graph_mask, scale, use_robust_los
     denominator = full_mask.sum().astype(y.dtype)
 
     num_nodes_per_graph = jax.ops.segment_sum(
-    data=jnp.ones_like(batch_segments),     
-    segment_ids=batch_segments,             
-    num_segments=len(graph_mask)
+        data=jnp.ones_like(batch_segments),     
+        segment_ids=batch_segments,             
+        num_segments=len(graph_mask)
     )
 
     num_nodes_per_graph = jnp.maximum(num_nodes_per_graph, 1)
