@@ -27,7 +27,7 @@ h5py = "*"
 ml_collections = "*"
 setuptools = "<81"
 jraph = { git = "https://github.com/kabylda/jraph.git", branch = "master", optional = false }
-jax-md = { git = "https://github.com/kabylda/jax-md.git", branch = "main" , optional = false }
+jax-md = { git = "https://github.com/jax-md/jax-md.git", tag = "jax-md-v0.2.25", optional = false }
 glp = { git = "https://github.com/kabylda/glp.git", branch = "electrostatics_neighbourlist", optional = false }
 jax-pme = { git = "https://github.com/fbruenig/jax-pme", branch = "main" , optional = false }
 
